@@ -92,7 +92,7 @@ Everything shartifacts keeps is in the data folder (`SHARTIFACTS_DATA`, `./data`
 | `db/`, `storage/`, `assets/`, `comments/` | Each artifact's documents, `window.storage`, uploads and comment threads |
 | `media/` | The Media library |
 | `apps/` | Apps: every version's source and build, their data (`apps/<id>/data/`) and settings |
-| `meta/` | People, share links, server secrets (session and label keys) and, with sign-in on, `auth.json`: the password hash and the digests of sessions and tokens |
+| `meta/` | People, share links, the recent change history agents watch (`events.jsonl`), server secrets (session and label keys) and, with sign-in on, `auth.json`: the password hash and the digests of sessions and tokens |
 
 For a consistent snapshot, stop the stack briefly:
 

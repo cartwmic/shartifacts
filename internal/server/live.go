@@ -1,9 +1,13 @@
 package server
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sync"
 	"time"
@@ -14,7 +18,8 @@ import (
 // The live hub carries what happens to an artifact to the pages showing it, as server-sent
 // events: document, version, comment and asset changes (from the store), and the `room`
 // capability's presence and messages between everyone viewing it right now. It also keeps
-// a short history for agents watching for changes (watch_artifacts).
+// a short history for agents watching for changes (watch_artifacts). The history is kept in
+// a file so a restart does not lose it: an agent's cursor stays good across one.
 
 type liveClient struct {
 	artifact, peer, viewer string
@@ -49,7 +54,9 @@ type hub struct {
 	rooms   map[string]map[string]map[string]*roomPeer
 	history []LiveEvent
 	seq     int64
-	wake    chan struct{}
+	// path is the file the history is appended to, one JSON event per line.
+	path string
+	wake chan struct{}
 	// visible reports whether a share visitor may read the document at a path.
 	visible func(artifact, path string) bool
 }
@@ -60,8 +67,72 @@ var (
 	peerLabel = regexp.MustCompile(`^[a-z0-9]{8,32}$`)
 )
 
-func newHub() *hub {
-	return &hub{clients: map[string]map[*liveClient]bool{}, rooms: map[string]map[string]map[string]*roomPeer{}, wake: make(chan struct{})}
+const keptEvents = 2000
+
+func newHub(path string) *hub {
+	h := &hub{clients: map[string]map[*liveClient]bool{}, rooms: map[string]map[string]map[string]*roomPeer{}, wake: make(chan struct{}), path: path}
+	h.load()
+	return h
+}
+
+// load reads the saved history, keeps the last keptEvents and continues seq after them. A
+// line a crash cut short is skipped. The file is rewritten when it held more than is kept
+// (so it does not grow without end) or a line was skipped (so the next event does not get
+// appended onto the torn one).
+func (h *hub) load() {
+	f, err := os.Open(h.path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	total, skipped := 0, false
+	sc := bufio.NewScanner(f)
+	sc.Buffer(nil, 1<<20)
+	for sc.Scan() {
+		var e LiveEvent
+		if json.Unmarshal(sc.Bytes(), &e) != nil || e.Seq <= h.seq {
+			skipped = true
+			continue
+		}
+		h.history = append(h.history, e)
+		h.seq = e.Seq
+		total++
+	}
+	if len(h.history) > keptEvents {
+		h.history = h.history[len(h.history)-keptEvents:]
+	}
+	if total > keptEvents || skipped {
+		var out []byte
+		for _, e := range h.history {
+			b, _ := json.Marshal(e)
+			out = append(append(out, b...), '\n')
+		}
+		tmp := h.path + ".tmp"
+		if err = os.WriteFile(tmp, out, 0600); err == nil {
+			err = os.Rename(tmp, h.path)
+		}
+		if err != nil {
+			log.Printf("trim %s: %v", h.path, err)
+		}
+	}
+}
+
+// persist appends one event to the history file. h.mu is held.
+func (h *hub) persist(e LiveEvent) {
+	b, _ := json.Marshal(e)
+	err := os.MkdirAll(filepath.Dir(h.path), 0700)
+	if err == nil {
+		var f *os.File
+		if f, err = os.OpenFile(h.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil {
+			_, err = f.Write(append(b, '\n'))
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+		}
+	}
+	if err != nil {
+		log.Printf("save event history %s: %v", h.path, err)
+	}
 }
 
 func (h *hub) broadcast(artifact string, v any, to func(*liveClient) bool) {
@@ -86,27 +157,35 @@ func (h *hub) changed(artifact, kind, detail string) {
 	})
 	h.mu.Lock()
 	h.seq++
-	h.history = append(h.history, LiveEvent{h.seq, artifact, kind, detail, time.Now().UTC()})
-	if len(h.history) > 2000 {
-		h.history = h.history[len(h.history)-2000:]
+	e := LiveEvent{h.seq, artifact, kind, detail, time.Now().UTC()}
+	h.history = append(h.history, e)
+	if len(h.history) > keptEvents {
+		h.history = h.history[len(h.history)-keptEvents:]
 	}
+	h.persist(e)
 	close(h.wake)
 	h.wake = make(chan struct{})
 	h.mu.Unlock()
 }
 
 // since returns events after seq (for artifacts in ids, if any), and a channel closed at
-// the next event.
-func (h *hub) since(seq int64, ids map[string]bool, kinds map[string]bool) ([]LiveEvent, int64, chan struct{}) {
+// the next event. gap reports that the cursor cannot be honoured: it is older than the
+// oldest event kept, or newer than any event so far (the history was lost). Every kept event
+// is then returned, so the caller sees everything the hub still knows. Seq 0 is a first
+// call, not a stale cursor.
+func (h *hub) since(seq int64, ids map[string]bool, kinds map[string]bool) (out []LiveEvent, cursor int64, wake chan struct{}, gap bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	out := []LiveEvent{}
+	if seq > h.seq || seq > 0 && len(h.history) > 0 && h.history[0].Seq > seq+1 {
+		gap, seq = true, 0
+	}
+	out = []LiveEvent{}
 	for _, e := range h.history {
 		if e.Seq > seq && (len(ids) == 0 || ids[e.Artifact]) && (len(kinds) == 0 || kinds[e.Kind]) {
 			out = append(out, e)
 		}
 	}
-	return out, h.seq, h.wake
+	return out, h.seq, h.wake, gap
 }
 
 func (h *hub) peers(artifact, room string) []*roomPeer {
