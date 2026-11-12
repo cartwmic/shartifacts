@@ -14,6 +14,9 @@ export GOCACHE="$cache/gocache" GOPATH="$cache/gopath"
 [ -d node_modules ] || npm ci --no-audit --no-fund >/dev/null
 case "${SHX_NO_BROWSER:-}" in
   1) ;;
-  *) npx --no-install playwright install chromium >/dev/null ;;
+  *)
+    # A browser dir of its own per job: a cache shared by jobs on one node can be half-written by another job.
+    export PLAYWRIGHT_BROWSERS_PATH="$(mktemp -d)/pw"
+    npx --no-install playwright install chromium >/dev/null ;;
 esac
 exec "$@"
