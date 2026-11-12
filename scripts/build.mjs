@@ -41,6 +41,19 @@ await build({
   outfile: "web/vendor/documents.js",
   legalComments: "linked",
 });
+// The pen of the draw tool. runtime.js loads it from the preview the first time someone
+// draws or a saved drawing needs showing, since a preview cannot fetch anything else.
+await build({
+  stdin: {
+    contents: `import {getStroke} from 'perfect-freehand'; window.__shartifactsFreehand = getStroke;`,
+    resolveDir: process.cwd(),
+  },
+  bundle: true,
+  minify: true,
+  format: "iife",
+  outfile: "web/vendor/freehand.js",
+  legalComments: "linked",
+});
 
 // KaTeX's stylesheet with its woff2 fonts inlined: previews only load fonts from data: URLs.
 const katexCSS = (await readFile("node_modules/katex/dist/katex.min.css", "utf8")).replace(
