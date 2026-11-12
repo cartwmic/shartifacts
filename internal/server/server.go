@@ -19,6 +19,7 @@ import (
 	"net/netip"
 	"net/url"
 	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -123,7 +124,7 @@ func (s *Server) PublicHandler() http.Handler {
 
 func (s *Server) build() http.Handler {
 	s.hubOnce.Do(func() {
-		s.hub = newHub()
+		s.hub = newHub(filepath.Join(s.Store.Dir(), "meta", "events.jsonl"))
 		s.hub.visible = func(artifact, path string) bool {
 			return s.Store.DocReadable(artifact, path, store.Viewer{ReadOnly: true})
 		}

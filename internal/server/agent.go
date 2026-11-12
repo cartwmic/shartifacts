@@ -185,7 +185,7 @@ func (s *Server) addAgentTools(m *mcp.Server) {
 		Kinds []string `json:"kinds,omitempty" jsonschema:"version, comments, db, assets, archived (detail true or false) or deleted; omit for all"`
 		Wait  int      `json:"wait_seconds,omitempty" jsonschema:"Wait up to this long (max 50) for the next event when there is none yet"`
 	}
-	mcp.AddTool(m, &mcp.Tool{Name: "watch_artifacts", Description: "Learn what changed: new versions (yours or the person's), comments, page data, assets, archiving and deletion. Returns events after the cursor, waiting up to wait_seconds for one; pass the returned cursor next time."}, func(ctx context.Context, req *mcp.CallToolRequest, in WatchInput) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(m, &mcp.Tool{Name: "watch_artifacts", Description: "Learn what changed: new versions (yours or the person's), comments, page data, assets, archiving and deletion. Returns events after the cursor, waiting up to wait_seconds for one; pass the returned cursor next time. The history survives restarts. gap:true means the cursor could not be honoured (it is older than the oldest event kept, or newer than the server has seen): re-read what you track (list_artifacts, artifact_comments) rather than trust the events alone."}, func(ctx context.Context, req *mcp.CallToolRequest, in WatchInput) (*mcp.CallToolResult, any, error) {
 		ids, kinds := map[string]bool{}, map[string]bool{}
 		for _, id := range in.IDs {
 			ids[id] = true
@@ -195,17 +195,23 @@ func (s *Server) addAgentTools(m *mcp.Server) {
 		}
 		deadline := time.After(time.Duration(min(max(in.Wait, 0), 50)) * time.Second)
 		for {
-			events, cursor, wake := s.hub.since(in.After, ids, kinds)
-			if len(events) > 100 {
+			events, cursor, wake, gap := s.hub.since(in.After, ids, kinds)
+			// A first call asks for recent events, so it gets the last 100. Any other call gets
+			// every event after its cursor, or gap when the server cannot say what they were.
+			if in.After == 0 && len(events) > 100 {
 				events = events[len(events)-100:]
 			}
-			if len(events) > 0 || in.Wait <= 0 {
-				return nil, map[string]any{"events": events, "cursor": cursor}, nil
+			reply := map[string]any{"events": events, "cursor": cursor}
+			if gap {
+				reply["gap"] = true
+			}
+			if len(events) > 0 || in.Wait <= 0 || gap {
+				return nil, reply, nil
 			}
 			select {
 			case <-wake:
 			case <-deadline:
-				return nil, map[string]any{"events": events, "cursor": cursor}, nil
+				return nil, reply, nil
 			case <-ctx.Done():
 				return nil, nil, ctx.Err()
 			}

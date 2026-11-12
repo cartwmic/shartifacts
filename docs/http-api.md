@@ -33,7 +33,8 @@ curl -H 'Content-Type: application/json' http://localhost:8080/api/artifacts/bul
 | Endpoint | Body | Purpose |
 | --- | --- | --- |
 | `POST /api/artifacts/{id}/storage` | `{op, key, value, shared, prefix}` | `window.storage` operations; results match Claude's (`get` of a missing key returns `null`) |
-| `GET/POST /api/artifacts/{id}/comments` | `{body, parent, quote, anchor, element, version, to_claude, author}` | List or add comments. `anchor` (a CSS path), `quote` and `element` (an opening tag) say what a comment points at; `version` is the one it was made on (the latest when left out) |
+| `GET/POST /api/artifacts/{id}/comments` | `{body, parent, quote, anchor, element, version, to_claude, author, stroke}` | List or add comments. `anchor` (a CSS path), `quote` and `element` (an opening tag) say what a comment points at; `version` is the one it was made on (the latest when left out). `stroke` is a drawing on a thread's first comment (`points`, `anchor`, `box`, `viewport`, `elements`, `color`, `width`; refused over 3000 points, 20 elements or 96 KiB). Listed threads carry `status` (`current`, `ok`, `lost` or `unchecked`) and `match` |
+| `POST /api/artifacts/{id}/comments/matches` | `{version, results: [{id, found}]}` | Report whether each thread's target was found in an artifact version (at most the latest). Unknown ids and reports older than the stored one are ignored; replies `{updated}` |
 | `PUT /api/artifacts/{id}/comments/{comment}` | `{resolved}` | Resolve or reopen a thread |
 | `PUT /api/artifacts/{id}/pin` | `{pinned}` | Pin to the top of the library (no new revision) |
 | `GET /api/artifacts?archived=` | | Summaries, most recently updated first: the library by default, `only` the archive, `include` both (archived ones carry `archived_at`); another value is `400` |
