@@ -7,6 +7,8 @@
 (() => {
   "use strict";
   const embedded = parent !== window;
+  // Where this script came from, to fetch the draw tool's pen from beside it.
+  const runtimeSrc = document.currentScript?.src || "";
   const claude = (window.claude = window.claude || {});
   const pending = new Map(),
     subs = new Map();
@@ -341,7 +343,11 @@
   // by a click in comment mode or the Comment chip over selected text, goes back as
   // `shartifacts-comment-pick` with its anchor (a CSS path), quote, opening tag and box,
   // and the workspace opens its composer there. Pins open their thread
-  // (`shartifacts-comment-open`). Everything drawn lives in a shadow root beside <body>,
+  // (`shartifacts-comment-open`). Beside Comment the overlay offers Draw: a stroke drawn on
+// the page goes back as `shartifacts-comment-pick` too, with its `stroke` (see
+// describeStroke), and open threads that have one are drawn again, placed from the box
+// the element they were drawn on has now. Once a page is placed, what it could find of
+// each thread goes back as `shartifacts-comment-match`. Everything drawn lives in a shadow root beside <body>,
   // so the artifact's DOM, selectors and styles never see it, and nothing is drawn until
   // the workspace asks: thumbnails, share links and pages opened alone get none of it.
   // These messages only ever ask the workspace to show something; it decides the rest.
@@ -361,7 +367,15 @@
       missing = "",
       pickedBox = "",
       queued = 0,
-      relocated = 0;
+      relocated = 0,
+      tool = "comment",
+      cur = null,
+      drawn = null,
+      inked = null,
+      version = 0,
+      reported = "",
+      reportTimer = 0,
+      penLoading = false;
     // The text an element stands for: its words, or the label of an image or icon.
     const textOf = (el) => norm(el.textContent) || norm(el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title"));
     // The opening tag, with the attributes that find it in source: <button class="primary">.
@@ -406,6 +420,9 @@
     // Finds what a thread points at in the page as it is now: the element its anchor names
     // when that still holds the quoted words, or else wherever the words went. A quote
     // shorter than its element's text was selected text, which is marked as a range.
+    // `found` says whether the thread still holds: its quote is on the page (reworded
+    // words are not), or, with no quote, its element exists. Reworded text keeps its pin
+    // on the element so the spot can still be seen.
     const locate = (p) => {
       const quote = norm(p.quote);
       let el = null;
@@ -413,14 +430,14 @@
         el = p.anchor ? document.querySelector(p.anchor) : null;
       } catch {}
       if (el && (!quote || textOf(el).includes(quote))) {
-        if (!quote || textOf(el).slice(0, 500) === quote) return { el };
+        if (!quote || textOf(el).slice(0, 500) === quote) return { el, found: true };
         const range = findText(el, quote);
-        return range ? { el, range } : { el };
+        return range ? { el, range, found: true } : { el, found: true };
       }
       const range = quote && findText(document.body, quote);
-      if (!range) return el ? { el } : null;
+      if (!range) return el ? { el, found: false } : null;
       const near = elementOf(range.commonAncestorContainer);
-      return textOf(near).slice(0, 500) === quote ? { el: near } : { el: near, range };
+      return textOf(near).slice(0, 500) === quote ? { el: near, found: true } : { el: near, range, found: true };
     };
     const place = (target, r) => Object.assign(target.style, { left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px" });
     const shown = (r) => r && (r.width || r.height) && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
@@ -428,12 +445,202 @@
     // A pin sits at the end of what an element shows, so a heading's is beside its words
     // rather than at the far edge of the page; controls, media and drawings keep their box.
     const pinRect = (t) => {
+      if (t.p.stroke) return strokeRect(t.el, t.p.stroke, t.p.bounds);
       const r = rectOf(t);
       if (t.range || t.el instanceof SVGElement || /^(BUTTON|INPUT|SELECT|TEXTAREA|IMG|VIDEO|CANVAS|IFRAME)$/.test(t.el.tagName)) return r;
       const inner = document.createRange();
       inner.selectNodeContents(t.el);
       const c = inner.getBoundingClientRect();
       return c.width && c.height && c.left >= r.left - 1 && c.right <= r.right + 1 && c.top >= r.top - 1 ? c : r;
+    };
+    // ---- drawing --------------------------------------------------------------------------
+    // A stroke is saved relative to the box of the element it was drawn on (the anchor),
+    // never to the viewport, so it stays right after scrolling and after the page is laid
+    // out again at another width: its points move and scale with that box. While the
+    // pointer is down the points are kept in document coordinates, so scrolling in the
+    // middle of a stroke cannot bend it.
+    const STROKE = { color: "#d33", width: 4 };
+    const outlines = new WeakMap();
+    const r1 = (v) => Math.round(v * 10) / 10;
+    const boundsOf = (pts) => ({
+      x0: Math.min(...pts.map((p) => p[0])),
+      y0: Math.min(...pts.map((p) => p[1])),
+      x1: Math.max(...pts.map((p) => p[0])),
+      y1: Math.max(...pts.map((p) => p[1])),
+    });
+    // A saved stroke as the workspace sends it with a pin, or nothing if it cannot be drawn.
+    const strokeOf = (s) =>
+      Array.isArray(s?.points) && s.points.length > 1 && typeof s.box?.w === "number" && typeof s.box?.h === "number"
+        ? { stroke: { points: s.points, box: s.box, color: String(s.color || ""), width: s.width }, bounds: boundsOf(s.points) }
+        : {};
+    // The pen is perfect-freehand's getStroke, loaded from beside this script the first
+    // time it is needed; a preview cannot fetch from anywhere else.
+    const loadPen = () => {
+      if (window.__shartifactsFreehand || penLoading || !runtimeSrc) return;
+      penLoading = true;
+      const s = document.createElement("script");
+      s.src = new URL("/vendor/freehand.js", runtimeSrc).href;
+      s.crossOrigin = "anonymous";
+      s.onload = schedule;
+      (document.head || document.documentElement).append(s);
+    };
+    const svgPath = (o) => {
+      if (o.length < 4) return "";
+      const f = (p) => p[0].toFixed(1) + "," + p[1].toFixed(1),
+        mid = (a, b) => ((a[0] + b[0]) / 2).toFixed(1) + "," + ((a[1] + b[1]) / 2).toFixed(1);
+      let d = `M${f(o[0])}Q${f(o[1])} ${mid(o[1], o[2])}T`;
+      for (let i = 2; i < o.length - 1; i++) d += mid(o[i], o[i + 1]) + " ";
+      return d + "Z";
+    };
+    const inkOf = (pts, size) => {
+      const pen = window.__shartifactsFreehand;
+      return pen ? svgPath(pen(pts, { size, thinning: 0.5, smoothing: 0.5, streamline: 0.4, simulatePressure: false, last: true })) : "";
+    };
+    // Where a saved stroke's box has gone: its position and the scale from the box it was
+    // drawn on to the one the element has now.
+    const fit = (el, s) => {
+      const r = el.getBoundingClientRect();
+      if (!r.width && !r.height) return null;
+      return { r, sx: s.box.w > 0 && r.width ? r.width / s.box.w : 1, sy: s.box.h > 0 && r.height ? r.height / s.box.h : 1 };
+    };
+    const strokeRect = (el, s, b) => {
+      const f = fit(el, s);
+      if (!f) return el.getBoundingClientRect();
+      const left = f.r.left + b.x0 * f.sx,
+        top = f.r.top + b.y0 * f.sy,
+        right = f.r.left + b.x1 * f.sx,
+        bottom = f.r.top + b.y1 * f.sy;
+      return { left, top, right, bottom, width: right - left, height: bottom - top };
+    };
+    const ink = (key, d, left, top, color, opacity) => {
+      let path = ui.paths.get(key);
+      if (!path) {
+        path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        ui.ink.append(path);
+        ui.paths.set(key, path);
+      }
+      inked.add(key);
+      path.setAttribute("d", d);
+      path.setAttribute("transform", `translate(${left} ${top})`);
+      path.setAttribute("fill", /^#[0-9a-f]{3,8}$/i.test(color) ? color : STROKE.color);
+      path.setAttribute("fill-opacity", opacity);
+    };
+    const paintSaved = (key, el, s, opacity) => {
+      const f = el.isConnected && fit(el, s);
+      if (!f) return;
+      // Shaping a long stroke costs more than moving it, so the outline is kept until the
+      // element's size changes.
+      const size = Math.min(Math.max(Number(s.width) || STROKE.width, 1), 24),
+        id = [f.sx.toFixed(3), f.sy.toFixed(3), size].join(),
+        hit = outlines.get(s);
+      let d = hit?.id === id ? hit.d : inkOf(s.points.map(([x, y, p = 0.5]) => [x * f.sx, y * f.sy, p]), size);
+      if (!d) return;
+      outlines.set(s, { id, d });
+      ink(key, d, f.r.left, f.r.top, s.color, opacity);
+    };
+    const usable = (el) => el !== document.documentElement && el !== document.body && el !== host;
+    // The smallest element that holds a point, as the page lays out now.
+    const anchorAt = (x, y) => {
+      let best = null,
+        area = Infinity;
+      for (const el of document.elementsFromPoint(Math.min(Math.max(x, 0), innerWidth - 1), Math.min(Math.max(y, 0), innerHeight - 1))) {
+        if (!usable(el)) continue;
+        const r = el.getBoundingClientRect(),
+          a = r.width * r.height;
+        if (a > 0 && a < area) [best, area] = [el, a];
+      }
+      return best || document.body;
+    };
+    // Points spread along a stroke, about 8px apart and at most 60 of them.
+    const along = (pts) => {
+      let len = 0;
+      for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+      const step = Math.max(8, len / 60),
+        out = [pts[0]];
+      let run = 0;
+      for (let i = 1; i < pts.length; i++) {
+        const [x0, y0] = pts[i - 1],
+          [x1, y1] = pts[i],
+          d = Math.hypot(x1 - x0, y1 - y0);
+        for (run += d; run >= step; run -= step) out.push([x1 - ((x1 - x0) * (run - step)) / d, y1 - ((y1 - y0) * (run - step)) / d]);
+      }
+      return out.concat([pts[pts.length - 1]]);
+    };
+    // The elements a stroke crosses, deepest first: what an agent reads to know what was
+    // marked without seeing the picture.
+    const under = (pts) => {
+      const seen = new Set(),
+        crossed = [];
+      for (const [x, y] of along(pts))
+        for (const el of document.elementsFromPoint(x - scrollX, y - scrollY))
+          if (usable(el) && !seen.has(el)) {
+            seen.add(el);
+            let depth = 0;
+            for (let n = el.parentElement; n; n = n.parentElement) depth++;
+            crossed.push([el, depth]);
+          }
+      return crossed
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 20)
+        .map(([el]) => ({ path: cssPath(el), tag: describe(el), text: textOf(el).slice(0, 120) }));
+    };
+    // What a finished stroke sends: points [dx, dy, pressure] from the anchor's corner (the
+    // anchor is the smallest element holding the middle of the stroke), that box in
+    // document coordinates, and the frame's size and scroll for anyone redrawing it.
+    const describeStroke = (pts) => {
+      // The store keeps at most 3000 points.
+      const step = Math.ceil(pts.length / 2999);
+      if (step > 1) pts = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
+      const b = boundsOf(pts),
+        el = anchorAt((b.x0 + b.x1) / 2 - scrollX, (b.y0 + b.y1) / 2 - scrollY),
+        r = el.getBoundingClientRect(),
+        ox = r.left + scrollX,
+        oy = r.top + scrollY;
+      const stroke = {
+        v: 1,
+        viewport: { w: innerWidth, h: innerHeight, scroll_x: Math.round(scrollX), scroll_y: Math.round(scrollY) },
+        anchor: cssPath(el),
+        box: { x: r1(ox), y: r1(oy), w: r1(r.width), h: r1(r.height) },
+        points: pts.map(([x, y, p]) => [r1(x - ox), r1(y - oy), Math.round(p * 100) / 100]),
+        color: STROKE.color,
+        width: STROKE.width,
+        elements: under(pts),
+      };
+      return { el, stroke, rect: { left: b.x0 - scrollX, top: b.y0 - scrollY, width: b.x1 - b.x0, height: b.y1 - b.y0 } };
+    };
+    const extend = (e) => {
+      const x = e.clientX + scrollX,
+        y = e.clientY + scrollY,
+        last = cur.pts[cur.pts.length - 1];
+      if (last) {
+        const d = Math.hypot(x - last[0], y - last[1]);
+        if (d < 1) return;
+        cur.len += d;
+      }
+      // Only a pen reports pressure that means something; a finger or mouse reads 0 or 1.
+      cur.pts.push([x, y, e.pointerType === "pen" && e.pressure ? e.pressure : 0.5]);
+    };
+    const finish = () => {
+      const { pts, len } = cur;
+      cur = null;
+      schedule();
+      // A tap or a twitch is not a drawing.
+      if (len < 12) return;
+      const { el, stroke, rect } = describeStroke(pts);
+      picked = null;
+      drawn = { el, p: { stroke, bounds: boundsOf(stroke.points) } };
+      say({ type: "shartifacts-comment-pick", anchor: stroke.anchor, quote: "", element: describe(el), rect: box(rect), text: false, stroke });
+    };
+    const clearDrawn = () => {
+      drawn = null;
+      say({ type: "shartifacts-comment-clear" });
+      schedule();
+    };
+    const setTool = (next) => {
+      tool = next;
+      cur = null;
+      if (next === "draw") loadPen();
+      schedule();
     };
     const sheets = (() => {
       try {
@@ -462,9 +669,30 @@ button{all:unset;pointer-events:auto;position:fixed;cursor:pointer!important;fon
 .pin.active{background:#7c2f1e;transform:scale(1.2)}
 .pin:focus-visible,.chip:focus-visible{outline:2px solid #1a1716;outline-offset:2px}
 .chip{display:none;background:#1a1716;color:#fff;padding:7px 11px;border-radius:999px}
-</style><div class="box hover"><span></span></div><div class="box picked"></div><div class="box flash"></div><button class="chip" type="button">Comment</button><div class="pins"></div>`;
+.ink{position:fixed;left:0;top:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+.capture{position:fixed;left:0;top:0;width:100%;height:100%;display:none;cursor:crosshair;pointer-events:auto;user-select:none;-webkit-user-select:none}
+.capture.on{display:block;touch-action:none}
+.tools{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);display:none;gap:2px;padding:3px;border-radius:999px;background:#1a1716;box-shadow:0 2px 8px rgb(0 0 0 / .25);pointer-events:auto}
+.tools button{position:static;box-shadow:none;padding:9px 14px;border-radius:999px;color:#fff;opacity:.8}
+.tools button[aria-pressed=true]{background:#b5523b;opacity:1}
+.tools button:focus-visible{outline:2px solid #fff;outline-offset:-2px}
+.undo{display:none}
+</style><svg class="ink" aria-hidden="true"></svg><div class="capture"></div><div class="box hover"><span></span></div><div class="box picked"></div><div class="box flash"></div><button class="chip" type="button">Comment</button><div class="pins"></div><div class="tools" role="group" aria-label="Annotate"><button type="button" data-tool="comment">Comment</button><button type="button" data-tool="draw">Draw</button><button type="button" class="undo">Undo</button></div>`;
       const $ = (s) => root.querySelector(s);
-      ui = { hover: $(".hover"), label: $(".hover span"), picked: $(".picked"), flash: $(".flash"), chip: $(".chip"), pins: $(".pins"), byId: new Map() };
+      ui = {
+        hover: $(".hover"),
+        label: $(".hover span"),
+        picked: $(".picked"),
+        flash: $(".flash"),
+        chip: $(".chip"),
+        pins: $(".pins"),
+        byId: new Map(),
+        ink: $(".ink"),
+        paths: new Map(),
+        layer: $(".capture"),
+        tools: $(".tools"),
+        undo: $(".undo"),
+      };
       // The chip keeps the selection it is about and the pins keep their clicks to themselves.
       for (const type of ["pointerdown", "mousedown"])
         ui.chip.addEventListener(type, (e) => {
@@ -481,6 +709,39 @@ button{all:unset;pointer-events:auto;position:fixed;cursor:pointer!important;fon
         const id = e.target.closest?.(".pin")?.dataset.id;
         if (id) say({ type: "shartifacts-comment-open", id });
       });
+      // The capture layer and the tools keep their presses to themselves, as the pins do.
+      for (const el of [ui.layer, ui.tools])
+        for (const type of ["pointerdown", "pointermove", "pointerup", "mousedown", "mouseup", "click", "touchstart", "touchend"]) el.addEventListener(type, (e) => e.stopPropagation());
+      ui.tools.addEventListener("click", (e) => {
+        const b = e.target.closest?.("button");
+        if (b?.dataset.tool) setTool(b.dataset.tool);
+        else if (b) clearDrawn();
+      });
+      ui.layer.addEventListener("pointerdown", (e) => {
+        if (cur || !e.isPrimary || (e.pointerType === "mouse" && e.button !== 0)) return;
+        e.preventDefault();
+        ui.layer.setPointerCapture(e.pointerId);
+        cur = { id: e.pointerId, pts: [], len: 0 };
+        extend(e);
+        schedule();
+      });
+      ui.layer.addEventListener("pointermove", (e) => {
+        if (!cur || e.pointerId !== cur.id) return;
+        const events = e.getCoalescedEvents?.() || [];
+        for (const c of events.length ? events : [e]) extend(c);
+        schedule();
+      });
+      ui.layer.addEventListener("pointerup", (e) => {
+        if (!cur || e.pointerId !== cur.id) return;
+        extend(e);
+        finish();
+      });
+      // A stroke the browser takes away (a touch it decides is a scroll, say) is dropped.
+      for (const type of ["pointercancel", "lostpointercapture"])
+        ui.layer.addEventListener(type, () => {
+          cur = null;
+          schedule();
+        });
       if (sheets) document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheets.marks, sheets.cursor];
       new MutationObserver((records) => {
         if (!pins.length && !picked) return;
@@ -506,8 +767,18 @@ button{all:unset;pointer-events:auto;position:fixed;cursor:pointer!important;fon
       clearTimeout(relocated);
       relocated = 0;
       located = pins.map((p) => ({ p, ...(locate(p) || {}) }));
-      const gone = located.filter((t) => !t.el).map((t) => t.p.id).join(" ");
+      const gone = located.filter((t) => !t.found).map((t) => t.p.id).join(" ");
       if (gone !== missing) say({ type: "shartifacts-comment-placed", missing: (missing = gone) ? gone.split(" ") : [] });
+      // Which threads this version still holds, said once the page has stopped changing:
+      // a page that draws late would otherwise report words as lost that are a moment away.
+      const results = located.map((t) => ({ id: t.p.id, found: !!t.found })),
+        key = version + JSON.stringify(results);
+      clearTimeout(reportTimer);
+      if (version && results.length && key !== reported)
+        reportTimer = setTimeout(() => {
+          reported = key;
+          say({ type: "shartifacts-comment-match", version, results });
+        }, 400);
       schedule();
     };
     const draw = () => {
@@ -518,7 +789,9 @@ button{all:unset;pointer-events:auto;position:fixed;cursor:pointer!important;fon
       const marks = [],
         lit = [];
       const seen = new Map();
+      inked = new Set();
       for (const t of located) {
+        if (t.p.stroke && t.el) paintSaved(t.p.id, t.el, t.p.stroke, t.p.id === active ? 0.8 : 0.4);
         let pin = ui.byId.get(t.p.id);
         if (!pin) {
           pin = document.createElement("button");
@@ -552,13 +825,28 @@ button{all:unset;pointer-events:auto;position:fixed;cursor:pointer!important;fon
           pin.remove();
           ui.byId.delete(id);
         }
-      // What the composer is about stays marked until it closes.
-      const pr = picked?.el.isConnected && rectOf(picked);
+      // What the composer is about stays marked until it closes: the element picked, or
+      // the stroke just drawn.
+      if (drawn?.el.isConnected) paintSaved("drawn", drawn.el, drawn.p.stroke, 0.8);
+      if (cur) {
+        const d = inkOf(cur.pts.map(([x, y, p]) => [x - scrollX, y - scrollY, p]), STROKE.width);
+        if (d) ink("live", d, 0, 0, STROKE.color, 0.8);
+      }
+      for (const [key, path] of ui.paths)
+        if (!inked.has(key)) {
+          path.remove();
+          ui.paths.delete(key);
+        }
+      ui.tools.style.display = mode ? "flex" : "none";
+      for (const b of ui.tools.querySelectorAll("[data-tool]")) b.setAttribute("aria-pressed", String(b.dataset.tool === tool));
+      ui.undo.style.display = drawn ? "inline-block" : "";
+      ui.layer.classList.toggle("on", mode && tool === "draw");
+      const pr = picked ? picked.el.isConnected && rectOf(picked) : drawn?.el.isConnected && strokeRect(drawn.el, drawn.p.stroke, drawn.p.bounds);
       if (picked?.range) lit.push(picked.range);
-      if (pr && !picked.range) place(ui.picked, pr);
-      ui.picked.style.display = pr && !picked.range ? "block" : "none";
+      if (pr && picked && !picked.range) place(ui.picked, pr);
+      ui.picked.style.display = pr && picked && !picked.range ? "block" : "none";
       const next = pr ? JSON.stringify(box(pr)) : "";
-      if (picked && next && next !== pickedBox) say({ type: "shartifacts-comment-moved", rect: box(pr) });
+      if ((picked || drawn) && next && next !== pickedBox) say({ type: "shartifacts-comment-moved", rect: box(pr) });
       pickedBox = next;
       const fr = flash?.isConnected && flash.getBoundingClientRect();
       if (fr) place(ui.flash, fr);
@@ -635,7 +923,13 @@ button{all:unset;pointer-events:auto;position:fixed;cursor:pointer!important;fon
         if (!mode || e.key !== "Escape") return;
         e.stopImmediatePropagation();
         e.preventDefault();
-        say({ type: "shartifacts-comment-exit" });
+        // One step back at a time: the stroke being drawn, the one waiting for its
+        // comment, then comment mode.
+        if (cur) {
+          cur = null;
+          schedule();
+        } else if (drawn) clearDrawn();
+        else say({ type: "shartifacts-comment-exit" });
       },
       true,
     );
@@ -647,6 +941,11 @@ button{all:unset;pointer-events:auto;position:fixed;cursor:pointer!important;fon
       if (!t?.el?.isConnected) return;
       if (!t.el.getClientRects().length) t.el.dispatchEvent(new CustomEvent("shartifacts:reveal", { bubbles: true }));
       requestAnimationFrame(() => {
+        if (t.p.stroke) {
+          // The stroke is what to look at, which may be a small part of its anchor.
+          const r = strokeRect(t.el, t.p.stroke, t.p.bounds);
+          return scrollBy({ top: r.top + r.height / 2 - innerHeight / 2, left: r.left + r.width / 2 - innerWidth / 2, behavior: "smooth" });
+        }
         t.el.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
         flash = t.el;
         clearTimeout(flashTimer);
@@ -665,12 +964,19 @@ button{all:unset;pointer-events:auto;position:fixed;cursor:pointer!important;fon
       on = !!d.enabled;
       mode = on && !!d.mode;
       active = typeof d.active === "string" ? d.active : "";
-      const next = on && Array.isArray(d.pins) ? d.pins.filter((p) => p && typeof p.id === "string").slice(0, 1000).map((p) => ({ id: p.id, n: String(p.n ?? ""), anchor: String(p.anchor || ""), quote: String(p.quote || "") })) : [];
-      if (!d.pending) picked = null;
+      const next = on && Array.isArray(d.pins) ? d.pins.filter((p) => p && typeof p.id === "string").slice(0, 1000).map((p) => ({ id: p.id, n: String(p.n ?? ""), anchor: String(p.anchor || ""), quote: String(p.quote || ""), ...strokeOf(p.stroke) })) : [];
+      const was = version;
+      version = on && Number.isInteger(d.version) && d.version > 0 ? d.version : 0;
+      if (!d.pending) picked = drawn = null;
+      if (!mode) {
+        tool = "comment";
+        cur = null;
+      }
       if (!host && on) build();
       if (!mode && ui) ui.hover.style.display = "none";
+      if (next.some((p) => p.stroke)) loadPen();
       // Lighting another thread only redraws; new or changed threads are found again.
-      if (JSON.stringify(next) === JSON.stringify(pins) && located.length === pins.length) return schedule();
+      if (version === was && JSON.stringify(next) === JSON.stringify(pins) && located.length === pins.length) return schedule();
       pins = next;
       relocate(true);
     });
