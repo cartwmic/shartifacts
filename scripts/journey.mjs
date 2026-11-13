@@ -14,10 +14,10 @@ import { DESKTOP, PHONE, outputDir, reporter, startLocal } from "./journey/lib.m
 // What each journey runs as: the profiles it needs (each is a run of its own).
 const JOURNEYS = {
   base: [PHONE, DESKTOP],
-  annot: [PHONE],
+  annot: [PHONE, DESKTOP],
   draw: [PHONE, DESKTOP],
-  lost: [DESKTOP],
-  fidelity: [PHONE],
+  lost: [PHONE, DESKTOP],
+  fidelity: [PHONE, DESKTOP],
 };
 
 const args = process.argv.slice(2);

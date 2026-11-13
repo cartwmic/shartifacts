@@ -1184,6 +1184,10 @@ async function reportMatches(d) {
   const known = new Set(comments.filter((c) => !c.parent).map((c) => c.id)),
     results = Array.isArray(d.results) ? d.results.filter((r) => known.has(r?.id)).map((r) => ({ id: r.id, found: !!r.found })) : [];
   if (!state.artifact || state.editing || d.version !== state.version || !results.length) return;
+  // The page says this once it has stopped changing, so it also settles which threads the panel
+  // flags as not found: the earlier, quicker `placed` message can be reset by a frame reload.
+  unplaced = new Set(results.filter((r) => !r.found).map((r) => r.id));
+  markUnplaced();
   try {
     await api(`/api/artifacts/${encodeURIComponent(state.artifact.id)}/comments/matches`, {
       method: "POST",

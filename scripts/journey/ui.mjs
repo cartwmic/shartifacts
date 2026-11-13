@@ -32,12 +32,16 @@ export const SEL = {
   drawOnAttr: ["aria-pressed", "true"],
   savedStroke: "shartifacts-overlay svg path",
   // How a thread in the panel shows that it has a drawing, and that it was lost.
-  threadStroke: ".thread-stroke, .thread svg, .thread img",
+  threadStroke: ".stroke-thumb",
   threadLost: ".thread-unplaced",
 };
 
 // A touch device taps; a mouse clicks.
 export const tap = (env, locator) => (env.profile.touch ? locator.tap() : locator.click());
+// For the workspace's own buttons: after raw CDP touch events (a swipe or a stroke) Playwright's
+// tap can be swallowed by the browser's touch state, so these are plain clicks. The strokes and the
+// swipe are the touch input under test; pressing Send is not.
+export const press = (locator) => locator.click();
 
 // A freshly loaded preview is an out-of-process frame; Chrome routes input into it only
 // once its hit-test data catches up, slightly after load. Until then a press lands on the
@@ -64,6 +68,8 @@ export async function openWorkspace(env, id, { version } = {}) {
   const page = env.report.track(await ctx.newPage());
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => m.type() === "error" && errors.push("console: " + m.text()));
+  page.on("requestfailed", (r) => errors.push(`request failed: ${r.method()} ${r.url()} ${r.failure()?.errorText}`));
   await page.goto(`${env.base}/a/${id}${version ? `?version=${version}` : ""}`);
   await expect(page.locator(SEL.frame)).toHaveAttribute("data-ready", "true");
   await routed(page);
@@ -96,8 +102,16 @@ export async function submitComposer(env, ws, id, text, { before } = {}) {
   await ws.page.locator(SEL.composerText).fill(text);
   const posted = ws.page.waitForResponse((r) => r.request().method() === "POST" && r.url().endsWith(`/api/artifacts/${id}/comments`));
   before?.();
-  await tap(env, ws.page.locator(SEL.composerSendAgent));
-  const res = await posted;
+  const send = ws.page.locator(SEL.composerSendAgent);
+  const where = await send.boundingBox();
+  await press(send);
+  const res = await posted.catch(async (e) => {
+    const top = await ws.page.evaluate(({ x, y }) => {
+      const el = document.elementFromPoint(x, y);
+      return el ? `${el.tagName}#${el.id}.${el.className}` : "nothing";
+    }, { x: where.x + where.width / 2, y: where.y + where.height / 2 });
+    throw new Error(`${e.message.split("\n")[0]}; the send button was at ${JSON.stringify(where)}, the topmost element there was ${top}; the page logged: ${JSON.stringify(ws.errors)}`);
+  });
   assert.equal(res.status(), 201, "the comment was refused: " + (await res.text()));
   return res.json();
 }
@@ -178,13 +192,44 @@ export async function swipe(ws, dy) {
   await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
 }
 
+// Puts the frame back at the top and waits until it stays there for ten frames: a swipe
+// leaves a fling running, and a finger that lands on a flinging page only stops it.
+export async function settleAtTop(ws) {
+  await ws.frame.evaluate(
+    () =>
+      new Promise((done) => {
+        let still = 0;
+        const frame = () => {
+          if (scrollY === 0) still += 1;
+          else {
+            still = 0;
+            scrollTo(0, 0);
+          }
+          still >= 10 ? done() : requestAnimationFrame(frame);
+        };
+        frame();
+      }),
+  );
+}
+
 // Turns draw on: the Comment/Draw toggles live in the frame's overlay, which the
 // workspace shows once comment mode is on.
 export async function enterDraw(env, ws) {
   const toggle = ws.frame.locator(SEL.drawToggle);
-  if (!(await toggle.isVisible())) await tap(env, ws.page.locator(SEL.commentMode));
+  // Tap comment mode only when it is off: its button says which, and a second tap would turn it off again.
+  const mode = ws.page.locator(SEL.commentMode);
+  if ((await mode.getAttribute("aria-pressed")) !== "true") await press(mode);
+  await expect(mode).toHaveAttribute("aria-pressed", "true");
+  await expect(toggle).toBeVisible();
+  const where = await toggle.boundingBox();
   await tap(env, toggle);
-  await expect(toggle).toHaveAttribute(...SEL.drawOnAttr);
+  await expect(toggle).toHaveAttribute(...SEL.drawOnAttr).catch(async (e) => {
+    const top = await ws.page.evaluate(({ x, y }) => {
+      const el = document.elementFromPoint(x, y);
+      return el ? `${el.tagName}#${el.id}.${el.className}` : "nothing";
+    }, { x: where.x + where.width / 2, y: where.y + where.height / 2 });
+    throw new Error(`${e.message.split("\n")[0]}; the toggle was at ${JSON.stringify(where)}, the topmost element there was ${top}, comment mode is ${await mode.getAttribute("aria-pressed")}`);
+  });
 }
 
 // Scrolls to `selector`, draws a loop around it and opens the composer, as one person
@@ -204,7 +249,7 @@ export const rootOf = async (env, id, commentId) => (await restComments(env, id)
 
 // Opens the comments panel (on a phone it covers the page) and waits for a thread.
 export async function showThreads(env, ws, id) {
-  if ((await ws.page.locator(SEL.commentsLink).getAttribute("aria-expanded")) !== "true") await tap(env, ws.page.locator(SEL.commentsLink));
+  if ((await ws.page.locator(SEL.commentsLink).getAttribute("aria-expanded")) !== "true") await press(ws.page.locator(SEL.commentsLink));
   await expect(ws.page.locator(SEL.thread(id))).toBeVisible();
 }
 

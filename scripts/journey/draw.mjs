@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { mcpSession, watch } from "./lib.mjs";
 import { richPage } from "./fixtures.mjs";
-import { SEL, drawAround, enterDraw, expect, openWorkspace, rootOf, showThreads, strokeAgrees, submitComposer, swipe, tap } from "./ui.mjs";
+import { SEL, drawAround, enterDraw, expect, openWorkspace, rootOf, settleAtTop, showThreads, strokeAgrees, submitComposer, swipe, tap } from "./ui.mjs";
 
 export async function draw(env) {
   const { step } = env.report;
@@ -32,7 +32,7 @@ export async function draw(env) {
       }
       await expect.poll(() => scrolled(ws)).toBeGreaterThan(100);
       const moved = await scrolled(ws);
-      await ws.frame.evaluate(() => scrollTo(0, 0));
+      await settleAtTop(ws);
       n.saw(`${env.profile.touch ? "a touch swipe" : "the mouse wheel"} moved the frame to scrollY ${moved} with draw off`);
     });
 
