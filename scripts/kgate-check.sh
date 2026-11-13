@@ -11,11 +11,11 @@ run() { exec kgate --profile "$profile" -- sh -c "$1"; }
 case "${1:-}" in
   stroke) run "SHX_NO_BROWSER=1 scripts/kgate-job.sh scripts/gocheck.sh TestStroke" ;;
   wake) run "SHX_NO_BROWSER=1 scripts/kgate-job.sh scripts/gocheck.sh TestWakeCursor" ;;
-  status) run "$fetch scripts/kgate-job.sh sh -c 'scripts/gocheck.sh TestCommentStatus && node scripts/journey.mjs --local lost'" ;;
-  draw) run "scripts/kgate-job.sh node scripts/journey.mjs --local draw" ;;
-  fidelity) run "$fetch scripts/kgate-job.sh node scripts/journey.mjs --local fidelity" ;;
-  annot) run "$fetch scripts/kgate-job.sh node scripts/journey.mjs --local annot" ;;
-  live-base) run "scripts/kgate-job.sh node scripts/journey.mjs --base '${SHX_LIVE_URL:?set SHX_LIVE_URL}' base" ;;
-  live-annot) run "$fetch scripts/kgate-job.sh node scripts/journey.mjs --base '${SHX_LIVE_URL:?set SHX_LIVE_URL}' annot" ;;
+  status) run "$fetch scripts/kgate-job.sh sh -c 'scripts/gocheck.sh TestCommentStatus && node scripts/journey.mjs --local --out \"\$KGATE_OUT\" lost'" ;;
+  draw) run "scripts/kgate-job.sh node scripts/journey.mjs --local --out \"\$KGATE_OUT\" draw" ;;
+  fidelity) run "$fetch scripts/kgate-job.sh node scripts/journey.mjs --local --out \"\$KGATE_OUT\" fidelity" ;;
+  annot) run "$fetch scripts/kgate-job.sh node scripts/journey.mjs --local --out \"\$KGATE_OUT\" annot" ;;
+  live-base) run "scripts/kgate-job.sh node scripts/journey.mjs --base '${SHX_LIVE_URL:?set SHX_LIVE_URL}' --out \"\$KGATE_OUT\" base" ;;
+  live-annot) run "$fetch scripts/kgate-job.sh node scripts/journey.mjs --base '${SHX_LIVE_URL:?set SHX_LIVE_URL}' --out \"\$KGATE_OUT\" annot" ;;
   *) echo "usage: kgate-check.sh stroke|status|wake|draw|fidelity|annot|live-base|live-annot" >&2; exit 2 ;;
 esac
