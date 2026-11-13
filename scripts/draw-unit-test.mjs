@@ -425,6 +425,19 @@ try {
     await b.context.close();
   });
 
+  await step("a match report is made from the page as it is when the wait ends, not as it was when the wait began", async () => {
+    const b = await open(phone);
+    // The words are off the page when the threads arrive and back a moment later, as on a page that is still drawing.
+    await b.fr.evaluate(() => (document.querySelector("#copy").textContent = "Not yet."));
+    const from = await mark(b);
+    await tell(b, { pins: [{ id: "late", n: 1, anchor: "#copy", quote: "Revenue grew in Q2." }] });
+    await b.fr.evaluate(() => (document.querySelector("#copy").textContent = "Revenue grew in Q2."));
+    const m = await next(b, "shartifacts-comment-match", from);
+    assert.deepEqual(m.results, [{ id: "late", found: true }], "the first report is the settled page's");
+    assert.deepEqual(b.errors, []);
+    await b.context.close();
+  });
+
   assert.deepEqual(a.errors, []);
   console.log(`\n${failures.length ? "FAILED" : "OK"} ${steps.length} of ${steps.length + failures.length} steps in ${((Date.now() - started) / 1000).toFixed(1)} s`);
   process.exitCode = failures.length ? 1 : 0;

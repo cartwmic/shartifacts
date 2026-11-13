@@ -775,6 +775,22 @@ button{all:unset;pointer-events:auto;position:fixed;cursor:pointer!important;fon
     const schedule = () => {
       if (!queued) queued = requestAnimationFrame(draw);
     };
+    // Which threads this version still holds, said once the page has stopped changing: a page
+    // that draws late would otherwise report words as lost that are a moment away. The report
+    // is made from the page as it is when the wait ends, not as it was when the wait began, and
+    // not before the page has loaded.
+    const settle = () => {
+      clearTimeout(reportTimer);
+      if (!version || !pins.length) return;
+      reportTimer = setTimeout(() => {
+        if (document.readyState !== "complete") return addEventListener("load", settle, { once: true });
+        const results = pins.map((p) => ({ id: p.id, found: !!locate(p)?.found })),
+          key = version + JSON.stringify(results);
+        if (key === reported) return;
+        reported = key;
+        say({ type: "shartifacts-comment-match", version, results });
+      }, 400);
+    };
     // Finding threads again after the page changes costs more than drawing, so at most
     // twice a second however often the page changes.
     const relocate = (now) => {
@@ -787,16 +803,7 @@ button{all:unset;pointer-events:auto;position:fixed;cursor:pointer!important;fon
       located = pins.map((p) => ({ p, ...(locate(p) || {}) }));
       const gone = located.filter((t) => !t.found).map((t) => t.p.id).join(" ");
       if (gone !== missing) say({ type: "shartifacts-comment-placed", missing: (missing = gone) ? gone.split(" ") : [] });
-      // Which threads this version still holds, said once the page has stopped changing:
-      // a page that draws late would otherwise report words as lost that are a moment away.
-      const results = located.map((t) => ({ id: t.p.id, found: !!t.found })),
-        key = version + JSON.stringify(results);
-      clearTimeout(reportTimer);
-      if (version && results.length && key !== reported)
-        reportTimer = setTimeout(() => {
-          reported = key;
-          say({ type: "shartifacts-comment-match", version, results });
-        }, 400);
+      settle();
       schedule();
     };
     const draw = () => {
