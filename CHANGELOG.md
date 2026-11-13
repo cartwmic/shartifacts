@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- **Pages record where an agent made them** ([docs/http-api.md](docs/http-api.md#page-source), [docs/agents.md](docs/agents.md)). A page created through `/mcp` stores `source` `{origin, thread}` from the `X-Origin` and `X-Thread` headers, set once and never changed. `GET /api/artifacts` shows it and filters with `?origin=` and `?no_source=1`; the MCP list and search tools include it. `SHARTIFACTS_REQUIRE_SOURCE=true` refuses agent-made pages without both headers; library creates and uploads are never refused.
+
 ## 2026.11.08
 
 ### Fixed

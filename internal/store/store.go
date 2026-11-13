@@ -68,8 +68,18 @@ type Artifact struct {
 	// ArchivedAt is when it was archived, zero while it is in the library. Archived
 	// artifacts keep everything, but listings and search leave them out unless asked, and
 	// only they can be deleted in bulk.
-	ArchivedAt time.Time  `json:"archived_at,omitzero"`
-	Revisions  []Revision `json:"revisions"`
+	ArchivedAt time.Time `json:"archived_at,omitzero"`
+	// Source is where an agent made it: the machine (origin) and the agent thread. It is
+	// set once, when the page is created, and nothing changes it later; nil for pages made
+	// any other way, and for those made before it existed.
+	Source    *Source    `json:"source"`
+	Revisions []Revision `json:"revisions"`
+}
+
+// Source says which machine and which agent thread created a page.
+type Source struct {
+	Origin string `json:"origin"`
+	Thread string `json:"thread"`
 }
 type Summary struct {
 	ID          string    `json:"id"`
@@ -83,6 +93,7 @@ type Summary struct {
 	Tags        []string  `json:"tags,omitempty"`
 	Pinned      bool      `json:"pinned,omitempty"`
 	ArchivedAt  time.Time `json:"archived_at,omitzero"`
+	Source      *Source   `json:"source"`
 	// OpenComments counts unresolved comment threads; Comments counts every comment.
 	OpenComments int `json:"open_comments,omitempty"`
 	Comments     int `json:"comments,omitempty"`
@@ -105,8 +116,11 @@ type Input struct {
 	// Capabilities replaces the declared capabilities when present; JSON null clears them.
 	Capabilities json.RawMessage `json:"capabilities,omitempty"`
 	// Owner is set by the server from the person creating it, never by the client.
-	Owner       string `json:"-"`
-	BaseVersion int    `json:"base_version,omitempty"`
+	Owner string `json:"-"`
+	// Source is set by the server from the agent connection that creates the page, never by
+	// the client, and is read only when creating: an update cannot change it.
+	Source      *Source `json:"-"`
+	BaseVersion int     `json:"base_version,omitempty"`
 }
 
 // Edit replaces OldStr, which must occur exactly once in the content, with NewStr. File
@@ -413,7 +427,7 @@ func (s *Store) List(f ArchiveFilter) []Summary {
 func (s *Store) summary(a Artifact) Summary {
 	r := a.Revisions[len(a.Revisions)-1]
 	return Summary{ID: a.ID, Title: r.Title, Kind: r.Kind, Version: r.Version, CreatedAt: a.CreatedAt, UpdatedAt: r.CreatedAt,
-		Description: a.Description, Icon: a.Icon, Tags: a.Tags, Pinned: a.Pinned, ArchivedAt: a.ArchivedAt, OpenComments: s.openThreads(a.ID), Comments: len(s.comments[a.ID])}
+		Description: a.Description, Icon: a.Icon, Tags: a.Tags, Pinned: a.Pinned, ArchivedAt: a.ArchivedAt, Source: a.Source, OpenComments: s.openThreads(a.ID), Comments: len(s.comments[a.ID])}
 }
 func (s *Store) Get(id string) (Artifact, error) {
 	s.mu.Lock()
@@ -555,6 +569,7 @@ func (s *Store) save(id string, in Input) (Artifact, error) {
 	}
 	if len(a.Revisions) == 1 {
 		a.Owner = in.Owner
+		a.Source = in.Source
 	}
 	return s.write(a)
 }

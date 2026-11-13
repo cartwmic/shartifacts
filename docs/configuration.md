@@ -42,6 +42,7 @@ A new password signs every browser out but keeps agent tokens, and `set-password
 | `SHARTIFACTS_CLAUDE_MODEL` | `-claude-model` | `claude-opus-5-5` | The model behind those calls. |
 | `SHARTIFACTS_CONNECTORS` | `-connectors` | | A JSON file of MCP servers that artifacts may call through `claude.use("mcp")`. See [claude-compatibility.md](claude-compatibility.md#connectors). |
 | `SHARTIFACTS_NO_CHUNK_UPLOAD` | `-no-chunk-upload` | `false` | Hides the base64 upload tools from agents, which saves their context when every agent can run `curl`. |
+| `SHARTIFACTS_REQUIRE_SOURCE` | `-require-source` | `false` | Refuses `create_artifact` through `/mcp` unless the request carries non-empty `X-Origin` and `X-Thread` headers. Creates in the library, uploads and apps are not affected. See [http-api.md](http-api.md#page-source). |
 
 ## Apps
 

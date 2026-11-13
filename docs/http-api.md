@@ -37,7 +37,7 @@ curl -H 'Content-Type: application/json' http://localhost:8080/api/artifacts/bul
 | `POST /api/artifacts/{id}/comments/matches` | `{version, results: [{id, found}]}` | Report whether each thread's target was found in an artifact version (at most the latest). Unknown ids and reports older than the stored one are ignored; replies `{updated}` |
 | `PUT /api/artifacts/{id}/comments/{comment}` | `{resolved}` | Resolve or reopen a thread |
 | `PUT /api/artifacts/{id}/pin` | `{pinned}` | Pin to the top of the library (no new revision) |
-| `GET /api/artifacts?archived=` | | Summaries, most recently updated first: the library by default, `only` the archive, `include` both (archived ones carry `archived_at`); another value is `400` |
+| `GET /api/artifacts?archived=&origin=&no_source=` | | Summaries, most recently updated first: the library by default, `only` the archive, `include` both (archived ones carry `archived_at`); another value is `400`. Each carries `source`: `{origin, thread}`, or `null`. `origin=NAME` keeps pages whose source origin is NAME, and `no_source=1` keeps pages with no source |
 | `POST /api/artifacts/bulk` | `{op, ids}` | `archive`, `restore` or `delete` up to 200 artifacts (no new revision). `delete` permanently deletes archived artifacts only. Returns `{op, done, failed: [{id, error}]}`: one missing, or not archived for `delete`, fails without stopping the rest |
 | `GET /api/search?q=&kind=&tag=&has=&updated=&archived=&sort=&limit=` | | Ranked search with excerpts (`q` takes the filters in **Finding things**; the other parameters add them, and `tag` repeats). The archive is left out unless `archived` is `include` or `only`; `sort=oldest` lists the least recently updated first |
 | `GET /api/artifacts/{id}/related` | | Artifacts sharing its vocabulary, and suggested tags |
@@ -80,3 +80,11 @@ curl -H 'Content-Type: application/json' http://localhost:8080/api/artifacts/bul
 | `/run/{id}/{live or n}/…`, `/p/{token}/…` | | An app version's pages, and its backend under `api/` |
 
 `POST` and `PUT /api/artifacts` accept `files` (`{"path": "content"}`, with `null` removing a file on update) and edits with `file`. `GET /preview/{id}?version=N` renders a saved version in a sandbox; a version with files redirects to `/preview/{id}/{N}/`, which serves the page with its files beneath it. `GET /view/{id}` is the full-page view. `GET /healthz` is a process health check. With sign-in on, the password and token endpoints need a signed-in browser: a token is refused with `403`, so a leaked token cannot make more or lock you out. `GET /login` is the login page. Browser live previews use `POST /api/previews` with `title`, `kind`, `content` and optional `files`, returning a one-use `url` that expires after two minutes (with files, a directory URL readable until it expires). Preview drafts are ephemeral and do not enter artifact history.
+
+## Page source
+
+A page created through the agent connection (`/mcp`, `create_artifact`) records where it came from, in a `source` field of its own (not a tag): `{"origin": "personal", "thread": "t-1"}`. The server takes the two values from the `X-Origin` request header (the machine) and the `X-Thread` header (the agent thread). They are stored once, when the page is created, and nothing changes them later: not a new version, a tag or title edit, archive or restore, whatever headers that request sends. A page made without the headers, in the library, by upload, through the web API, or before this field existed, has `"source": null` for good. A `source` in a web API request body is refused (`400`).
+
+`GET /api/artifacts` and `GET /api/artifacts/{id}` return `source`; the MCP `list_artifacts` and `search_artifacts` tools include it for each page. Filter the list with `?origin=NAME` or `?no_source=1`.
+
+`SHARTIFACTS_REQUIRE_SOURCE=true` (`-require-source`, off by default) makes `create_artifact` refuse a call whose `X-Origin` or `X-Thread` is missing or empty: the error names the missing header, nothing is stored, and the refusal is written to the server log. Creates in the library (`POST /api/artifacts`), uploads and apps are never refused.
