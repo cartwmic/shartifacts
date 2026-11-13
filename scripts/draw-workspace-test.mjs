@@ -25,7 +25,7 @@ try {
     assert.ok(i < 100, "the server did not start");
     await new Promise((r) => setTimeout(r, 100));
   }
-  const content = `<!doctype html><body style="margin:0;font:16px sans-serif"><h1 id="title">Report</h1><p id="note">Revenue grew.</p><div id="chart" style="margin:40px;height:200px;background:#cde"></div></body>`;
+  const content = `<!doctype html><body style="margin:0;font:16px sans-serif"><h1 id="title">Report</h1><p id="note">Revenue grew.</p><div id="chart" style="margin:40px;height:200px;background:#cde;overflow:hidden">${"😀".repeat(130)}</div></body>`;
   const made = await (await fetch(base + "/api/artifacts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "Draw", kind: "html", content }) })).json();
   const page = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
   const errors = [];
@@ -84,7 +84,8 @@ try {
   assert.equal(body.stroke.v, 1);
   assert.equal(body.stroke.anchor, "#chart");
   assert.equal(typeof body.stroke.anchor_tag, "string", "the posted stroke says what its anchor was");
-  assert.equal(typeof body.stroke.anchor_text, "string");
+  // The anchor's first 120 characters, cut between characters (a cut inside an emoji would not survive the round trip).
+  assert.equal(body.stroke.anchor_text, Array.from("😀".repeat(130)).slice(0, 120).join(""));
   assert.ok(body.stroke.points.length > 10 && body.stroke.elements.some((e) => e.path === "#chart"));
   assert.equal(body.version, 1);
   console.log(`SAW the comment posts with its stroke (${body.stroke.points.length} points, anchor ${body.stroke.anchor})`);

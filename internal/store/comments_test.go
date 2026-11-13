@@ -85,7 +85,8 @@ func TestStrokeRoundTrip(t *testing.T) {
 	a, _ := s.Save("", Input{Title: "Page", Kind: "html", Content: "x"})
 	b, _ := s.Save(a.ID, Input{Title: "Page", Kind: "html", Content: "y", BaseVersion: 1})
 	st := strokeInput(2)
-	st.AnchorTag, st.AnchorText = "svg", "Revenue by quarter"
+	text := "Revenue by quarter"
+	st.AnchorTag, st.AnchorText = "svg", &text
 	st.Elements = []StrokeElement{{Path: "#chart > svg > rect", Tag: `<rect class="bar">`, Text: "Q2 revenue"}}
 	root, e := s.AddComment(b.ID, CommentInput{Body: "this bar", Version: 1, Stroke: st})
 	if e != nil || root.Stroke == nil || root.Stroke.Version != 1 || root.Stroke.V != 1 {
@@ -99,8 +100,33 @@ func TestStrokeRoundTrip(t *testing.T) {
 	}
 	again, _ := Open(dir)
 	list, _ := again.Comments(b.ID)
-	if len(list) != 1 || list[0].Stroke == nil || list[0].Stroke.Version != 1 || len(list[0].Stroke.Points) != 2 || list[0].Stroke.Points[1][1] != 0.5 || list[0].Stroke.Elements[0].Text != "Q2 revenue" || list[0].Stroke.Box.H != 210 || list[0].Stroke.AnchorTag != "svg" || list[0].Stroke.AnchorText != "Revenue by quarter" {
+	if len(list) != 1 || list[0].Stroke == nil || list[0].Stroke.Version != 1 || len(list[0].Stroke.Points) != 2 || list[0].Stroke.Points[1][1] != 0.5 || list[0].Stroke.Elements[0].Text != "Q2 revenue" || list[0].Stroke.Box.H != 210 || list[0].Stroke.AnchorTag != "svg" || list[0].Stroke.AnchorText == nil || *list[0].Stroke.AnchorText != text {
 		t.Fatal("stroke did not survive a reload", list)
+	}
+}
+
+// An element with no text and no attributes records an empty anchor_text, which must come back
+// as empty and not as missing: a stroke saved without one is not checked against any text.
+func TestStrokeAnchorTextEmptyIsKept(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(dir)
+	a, _ := s.Save("", Input{Title: "Page", Kind: "html", Content: "x"})
+	empty, absent := strokeInput(2), strokeInput(2)
+	none := ""
+	empty.AnchorText = &none
+	e, _ := s.AddComment(a.ID, CommentInput{Body: "empty", Stroke: empty})
+	n, _ := s.AddComment(a.ID, CommentInput{Body: "absent", Stroke: absent})
+	again, _ := Open(dir)
+	list, _ := again.Comments(a.ID)
+	byID := map[string]*Stroke{}
+	for _, c := range list {
+		byID[c.ID] = c.Stroke
+	}
+	if byID[e.ID].AnchorText == nil || *byID[e.ID].AnchorText != "" {
+		t.Fatal("an empty anchor_text was lost", byID[e.ID])
+	}
+	if byID[n.ID].AnchorText != nil {
+		t.Fatal("a stroke without anchor_text gained one", byID[n.ID])
 	}
 }
 
@@ -120,7 +146,8 @@ func TestStrokeRefused(t *testing.T) {
 	longText := strokeInput(1)
 	longText.Elements = []StrokeElement{{Path: "a", Text: strings.Repeat("é", 121)}}
 	longAnchorText := strokeInput(1)
-	longAnchorText.AnchorText = strings.Repeat("é", 121)
+	long := strings.Repeat("é", 121)
+	longAnchorText.AnchorText = &long
 	for name, bad := range map[string]*Stroke{"points": strokeInput(3001), "elements": tooMany, "bytes": big, "text": longText, "anchor text": longAnchorText} {
 		if _, e := s.AddComment(a.ID, CommentInput{Body: "x", Stroke: bad}); e == nil || e.Error() != "stroke too large" {
 			t.Fatal(name, e)

@@ -16,12 +16,13 @@ type Stroke struct {
 	Version  int            `json:"version,omitempty"`
 	Viewport StrokeViewport `json:"viewport,omitempty"`
 	Anchor   string         `json:"anchor,omitempty"`
-	// AnchorTag and AnchorText say what the anchor path pointed at when the drawing was made
-	// (its lower-case tag name and its first 120 characters of text). A later version only
-	// still holds the drawing if its anchor path finds that element, not whatever now sits in
-	// the same position.
+	// AnchorTag and AnchorText say what the anchor path pointed at when the drawing was made:
+	// its lower-case tag name, and its first 120 characters of text (or, for an element with no
+	// text, its attributes). A later version only still holds the drawing if its anchor path
+	// finds that element, not whatever now sits in the same position. A pointer, so that an
+	// empty text is kept and a stroke saved without one is told apart from it.
 	AnchorTag  string    `json:"anchor_tag,omitempty"`
-	AnchorText string    `json:"anchor_text,omitempty"`
+	AnchorText *string   `json:"anchor_text,omitempty"`
 	Box        StrokeBox `json:"box,omitempty"`
 	// Points are [dx, dy] or [dx, dy, pressure], in CSS pixels from Box's corner.
 	Points   [][]float64     `json:"points" jsonschema:"[dx, dy] or [dx, dy, pressure 0..1] in CSS px from the anchor box's corner; at most 3000"`
@@ -88,7 +89,7 @@ func checkStroke(in *Stroke) (*Stroke, error) {
 	if len(st.AnchorTag) > 40 {
 		return nil, errors.New("stroke anchor_tag is at most 40 bytes")
 	}
-	if utf8.RuneCountInString(st.AnchorText) > maxElementText {
+	if st.AnchorText != nil && utf8.RuneCountInString(*st.AnchorText) > maxElementText {
 		return nil, errStrokeTooLarge
 	}
 	for _, e := range st.Elements {

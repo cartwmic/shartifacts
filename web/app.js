@@ -1086,7 +1086,7 @@ function cleanStroke(s) {
     viewport: { w: num(s.viewport?.w), h: num(s.viewport?.h), scroll_x: num(s.viewport?.scroll_x), scroll_y: num(s.viewport?.scroll_y) },
     anchor: text(s.anchor, 2000),
     ...(text(s.anchor_tag, 40) ? { anchor_tag: text(s.anchor_tag, 40) } : {}),
-    ...(typeof s.anchor_text === "string" ? { anchor_text: text(s.anchor_text, 120) } : {}),
+    ...(typeof s.anchor_text === "string" ? { anchor_text: Array.from(s.anchor_text).slice(0, 120).join("") } : {}),
     box: { x: num(s.box.x), y: num(s.box.y), w: num(s.box.w), h: num(s.box.h) },
     points: s.points.slice(0, 3000).map((p) => [num(p?.[0]), num(p?.[1]), num(p?.[2], 0.5)]),
     color: /^#[0-9a-f]{3,8}$/i.test(s.color) ? s.color : "#d33",

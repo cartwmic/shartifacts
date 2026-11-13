@@ -30,7 +30,7 @@ const pageHtml = `<!doctype html><html><head><meta charset="utf-8"><meta name="v
 <div id="grid">${"<i>x</i>".repeat(40)}</div>
 <div class="pad"></div>
 <div id="chart"><svg viewBox="0 0 300 150"><rect class="bar" x="20" y="60" width="70" height="80" fill="#69c"/><rect class="bar" x="115" y="30" width="70" height="110" fill="#c96"/><rect class="bar" x="210" y="50" width="70" height="90" fill="#6c9"/></svg></div>
-<div class="pad"></div></body></html>`;
+<div class="pad"></div><p id="emoji">${"😀".repeat(130)}</p></body></html>`;
 
 let origin = "";
 const server = createServer(async (req, res) => {
@@ -421,6 +421,28 @@ try {
     assert.equal(again["quote-here"], false);
     assert.equal(again["quote-moved"], false);
     assert.equal(again["anchor-here"], true);
+    assert.deepEqual(b.errors, []);
+    await b.context.close();
+  });
+
+  await step("a drawing on an element with no text is told from the one that moves into its place, and text is cut at whole characters", async () => {
+    const b = await open(phone);
+    // Bar 2 has no text, so what it is is its attributes. Removing it puts bar 3 in its slot.
+    const bar = around.stroke;
+    assert.match(bar.anchor_text, /^class=bar x=115 /, `a bar's identity is its attributes: ${bar.anchor_text}`);
+    const clipped = Array.from("😀".repeat(130)).slice(0, 120).join("");
+    const pins = [
+      { id: "bar", n: 1, anchor: bar.anchor, quote: "", stroke: bar },
+      { id: "emoji", n: 2, anchor: "#emoji", quote: "", stroke: { ...bar, anchor: "#emoji", anchor_tag: "p", anchor_text: clipped } },
+    ];
+    let from = await mark(b);
+    await tell(b, { pins });
+    let m = await next(b, "shartifacts-comment-match", from);
+    assert.deepEqual(m.results, [{ id: "bar", found: true }, { id: "emoji", found: true }], "both hold on the page they were drawn on");
+    from = await mark(b);
+    await b.fr.evaluate(() => document.querySelector("#chart rect:nth-of-type(2)").remove());
+    m = await next(b, "shartifacts-comment-match", from);
+    assert.deepEqual(Object.fromEntries(m.results.map((r) => [r.id, r.found])), { bar: false, emoji: true }, "the bar that moved into the slot is not the one drawn on");
     assert.deepEqual(b.errors, []);
     await b.context.close();
   });
