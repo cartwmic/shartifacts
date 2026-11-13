@@ -380,9 +380,6 @@
     const textOf = (el) => norm(el.textContent) || norm(el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title"));
     // Cut at whole characters: a cut inside an emoji would store half of it as U+FFFD, which the page never equals.
     const clip = (s, n = 120) => Array.from(s).slice(0, n).join("");
-    // What an element is, for telling it from whatever moves into its place: its text, or, with
-    // none (a chart bar, an image), its attributes, which is where it differs from its siblings.
-    const identityOf = (el) => clip(textOf(el) || Array.from(el.attributes).filter((a) => a.name !== "style").map((a) => `${a.name}=${norm(a.value)}`).join(" "));
     // The opening tag, with the attributes that find it in source: <button class="primary">.
     const describe = (el) => {
       let tag = "<" + el.tagName.toLowerCase();
@@ -429,26 +426,29 @@
     // words are not), or, with no quote, its element exists. Reworded text keeps its pin
     // on the element so the spot can still be seen.
     // A drawing holds while its anchor path still finds the element it was drawn on: the same
-    // tag, and what it was (its first words, or its attributes). A path like `p:nth-of-type(4)`
-    // names a slot, and after an edit the slot holds whatever moved into it, which is not what
-    // was circled.
-    const drawingHolds = (el, s) => (!s.anchor_tag || el.tagName.toLowerCase() === s.anchor_tag) && (s.anchor_text == null || identityOf(el) === s.anchor_text);
+    // tag and the same first words. A path like `p:nth-of-type(4)` names a slot, and after an
+    // edit the slot holds whatever moved into it, which is not what was circled.
+    const drawingHolds = (el, s) => (!s.anchor_tag || el.tagName.toLowerCase() === s.anchor_tag) && (s.anchor_text == null || clip(textOf(el)) === s.anchor_text);
+    // A drawing on an element with no text (a chart bar, an image, a canvas) cannot be told from
+    // the element that moves into its slot, nor from itself on another screen size, so no
+    // report is made for it: its status stays `unchecked` on a later version. It is still drawn.
+    const textless = (p) => !p.quote && p.stroke?.anchor_text === "";
     const locate = (p) => {
       const quote = norm(p.quote);
       let el = null;
       try {
         el = p.anchor ? document.querySelector(p.anchor) : null;
       } catch {}
-      if (el && !quote && p.stroke && !drawingHolds(el, p.stroke)) return { el, found: false };
+      if (el && !quote && p.stroke && !textless(p) && !drawingHolds(el, p.stroke)) return { el, found: false };
       if (el && (!quote || textOf(el).includes(quote))) {
-        if (!quote || textOf(el).slice(0, 500) === quote) return { el, found: true };
+        if (!quote || clip(textOf(el), 500) === quote) return { el, found: true };
         const range = findText(el, quote);
         return range ? { el, range, found: true } : { el, found: true };
       }
       const range = quote && findText(document.body, quote);
       if (!range) return el ? { el, found: false } : null;
       const near = elementOf(range.commonAncestorContainer);
-      return textOf(near).slice(0, 500) === quote ? { el: near, found: true } : { el: near, range, found: true };
+      return clip(textOf(near), 500) === quote ? { el: near, found: true } : { el: near, range, found: true };
     };
     const place = (target, r) => Object.assign(target.style, { left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px" });
     const shown = (r) => r && (r.width || r.height) && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
@@ -623,7 +623,7 @@
         viewport: { w: innerWidth, h: innerHeight, scroll_x: Math.round(scrollX), scroll_y: Math.round(scrollY) },
         anchor: cssPath(el),
         anchor_tag: el.tagName.toLowerCase(),
-        anchor_text: identityOf(el),
+        anchor_text: clip(textOf(el)),
         box: { x: r1(ox), y: r1(oy), w: r1(r.width), h: r1(r.height) },
         points: pts.map(([x, y, p]) => [r1(x - ox), r1(y - oy), Math.round(p * 100) / 100]),
         color: STROKE.color,
@@ -790,9 +790,9 @@ button{all:unset;pointer-events:auto;position:fixed;cursor:pointer!important;fon
       if (!version || !pins.length) return;
       reportTimer = setTimeout(() => {
         if (document.readyState !== "complete") return addEventListener("load", settle, { once: true });
-        const results = pins.map((p) => ({ id: p.id, found: !!locate(p)?.found })),
+        const results = pins.filter((p) => !textless(p)).map((p) => ({ id: p.id, found: !!locate(p)?.found })),
           key = version + JSON.stringify(results);
-        if (key === reported) return;
+        if (!results.length || key === reported) return;
         reported = key;
         say({ type: "shartifacts-comment-match", version, results });
       }, 400);
@@ -909,7 +909,7 @@ button{all:unset;pointer-events:auto;position:fixed;cursor:pointer!important;fon
       const quote = range ? norm(range.toString()) : textOf(el);
       picked = { el, range };
       schedule();
-      return { anchor: cssPath(el), quote: quote.slice(0, 500), element: describe(el), rect: box(range ? range.getBoundingClientRect() : el.getBoundingClientRect()), text: !!range };
+      return { anchor: cssPath(el), quote: clip(quote, 500), element: describe(el), rect: box(range ? range.getBoundingClientRect() : el.getBoundingClientRect()), text: !!range };
     };
     const pick = (el, range) => {
       say({ type: "shartifacts-comment-pick", ...point(el, range) });

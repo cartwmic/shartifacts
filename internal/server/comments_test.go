@@ -40,11 +40,15 @@ func TestStrokeOverHTTPAndMCP(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 	// An agent draws through artifact_comments add; the thread comes back from list.
-	added := commentsTool(t, h, map[string]any{"id": id, "op": "add", "body": "agent mark", "stroke": map[string]any{"points": [][]float64{{1, 2}, {3, 4, 0.9}}, "anchor": "main"}})
+	added := commentsTool(t, h, map[string]any{"id": id, "op": "add", "body": "agent mark", "stroke": map[string]any{"points": [][]float64{{1, 2}, {3, 4, 0.9}}, "anchor": "main", "anchor_tag": "main", "anchor_text": ""}})
 	if added["isError"] == true {
 		t.Fatal(added)
 	}
 	mine := added["structuredContent"].(map[string]any)
+	// An empty anchor_text is a statement (no text), and it comes back as one.
+	if txt, has := mine["stroke"].(map[string]any)["anchor_text"]; !has || txt != "" || mine["stroke"].(map[string]any)["anchor_tag"] != "main" {
+		t.Fatal("anchor_tag and an empty anchor_text did not round-trip over MCP", mine)
+	}
 	if mine["stroke"].(map[string]any)["version"] != float64(1) || mine["anchor"] != "main" {
 		t.Fatal(mine)
 	}

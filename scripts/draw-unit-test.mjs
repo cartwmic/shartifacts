@@ -30,7 +30,7 @@ const pageHtml = `<!doctype html><html><head><meta charset="utf-8"><meta name="v
 <div id="grid">${"<i>x</i>".repeat(40)}</div>
 <div class="pad"></div>
 <div id="chart"><svg viewBox="0 0 300 150"><rect class="bar" x="20" y="60" width="70" height="80" fill="#69c"/><rect class="bar" x="115" y="30" width="70" height="110" fill="#c96"/><rect class="bar" x="210" y="50" width="70" height="90" fill="#6c9"/></svg></div>
-<div class="pad"></div><p id="emoji">${"😀".repeat(130)}</p></body></html>`;
+<div class="pad"></div><p id="emoji">${"😀".repeat(130)}</p><p id="longemoji">${"x".repeat(499)}😀😀</p></body></html>`;
 
 let origin = "";
 const server = createServer(async (req, res) => {
@@ -377,7 +377,7 @@ try {
     await d.context.close();
   });
 
-  await step("found rules: a quote must be on the page (reworded is lost), a drawing needs the element it was drawn on (same tag and words), an anchor alone needs its element", async () => {
+  await step("found rules: a quote must be on the page (reworded is lost), a drawing on text needs the element it was drawn on (same tag and words), one on an element with no text is not reported, an anchor alone needs its element", async () => {
     const b = await open(phone);
     const pin = (id, anchor, quote, s) => ({ id, n: 1, anchor, quote, ...(s ? { stroke: s } : {}) });
     const pins = [
@@ -385,13 +385,16 @@ try {
       pin("quote-reworded", "#copy", "Revenue shrank"),
       pin("quote-moved", "#other", "Revenue grew in Q2."),
       pin("quote-nowhere", "#gone", "Nothing like this"),
-      pin("draw-here", under.anchor, "", under),
-      pin("draw-lost", "#gone", "", { ...under, anchor: "#gone" }),
+      // A drawing on text holds while its path finds that tag with those first words.
+      pin("draw-here", "#other", "", { ...under, anchor: "#other", anchor_tag: "p", anchor_text: "Costs stayed flat." }),
+      pin("draw-lost", "#gone", "", { ...under, anchor: "#gone", anchor_tag: "p", anchor_text: "Costs stayed flat." }),
       // The path still finds an element, but not the one drawn on: other words, or another tag.
-      pin("draw-reworded", under.anchor, "", { ...under, anchor_text: "Nothing like what was circled" }),
-      pin("draw-retagged", under.anchor, "", { ...under, anchor_tag: "section" }),
+      pin("draw-reworded", "#other", "", { ...under, anchor: "#other", anchor_tag: "p", anchor_text: "Nothing like what was circled" }),
+      pin("draw-retagged", "#other", "", { ...under, anchor: "#other", anchor_tag: "h2", anchor_text: "Costs stayed flat." }),
       // A stroke from before the page recorded its anchor holds while the path finds an element.
-      pin("draw-older", under.anchor, "", (({ anchor_tag, anchor_text, ...rest }) => rest)(under)),
+      pin("draw-older", "#other", "", (({ anchor_tag, anchor_text, ...rest }) => ({ ...rest, anchor: "#other" }))(under)),
+      // A drawing on an element with no text is never reported: its status stays unchecked.
+      pin("draw-textless", under.anchor, "", under),
       pin("anchor-here", "#title", ""),
       pin("anchor-lost", "#gone", ""),
     ];
@@ -399,6 +402,7 @@ try {
     await tell(b, { pins });
     const m = await next(b, "shartifacts-comment-match", from);
     assert.equal(m.version, 3);
+    assert.ok(!m.results.some((r) => r.id === "draw-textless"), "no report is made for a drawing on an element with no text");
     assert.deepEqual(Object.fromEntries(m.results.map((r) => [r.id, r.found])), {
       "quote-here": true,
       "quote-reworded": false,
@@ -425,24 +429,53 @@ try {
     await b.context.close();
   });
 
-  await step("a drawing on an element with no text is told from the one that moves into its place, and text is cut at whole characters", async () => {
+  await step("r3.f1/f2: a drawing on an element with no text is never reported, on this page, another screen size or after the element is removed", async () => {
     const b = await open(phone);
-    // Bar 2 has no text, so what it is is its attributes. Removing it puts bar 3 in its slot.
     const bar = around.stroke;
-    assert.match(bar.anchor_text, /^class=bar x=115 /, `a bar's identity is its attributes: ${bar.anchor_text}`);
-    const clipped = Array.from("😀".repeat(130)).slice(0, 120).join("");
+    assert.equal(bar.anchor_text, "", "a chart bar has no text to remember");
+    const word = { ...bar, anchor: "#other", anchor_tag: "p", anchor_text: "Costs stayed flat." };
     const pins = [
       { id: "bar", n: 1, anchor: bar.anchor, quote: "", stroke: bar },
-      { id: "emoji", n: 2, anchor: "#emoji", quote: "", stroke: { ...bar, anchor: "#emoji", anchor_tag: "p", anchor_text: clipped } },
+      { id: "word", n: 2, anchor: "#other", quote: "", stroke: word },
     ];
     let from = await mark(b);
     await tell(b, { pins });
     let m = await next(b, "shartifacts-comment-match", from);
-    assert.deepEqual(m.results, [{ id: "bar", found: true }, { id: "emoji", found: true }], "both hold on the page they were drawn on");
+    assert.deepEqual(m.results, [{ id: "word", found: true }], "only the drawing on text is reported");
+    // The bar's size follows the screen (as a canvas chart's does) and then bar 2 is removed so bar 3 takes its slot.
     from = await mark(b);
-    await b.fr.evaluate(() => document.querySelector("#chart rect:nth-of-type(2)").remove());
+    await b.fr.evaluate(() => {
+      const bars = document.querySelectorAll("#chart rect");
+      bars[1].setAttribute("width", "999");
+      bars[1].remove();
+      document.querySelector("#other").textContent = "Costs went up.";
+    });
     m = await next(b, "shartifacts-comment-match", from);
-    assert.deepEqual(Object.fromEntries(m.results.map((r) => [r.id, r.found])), { bar: false, emoji: true }, "the bar that moved into the slot is not the one drawn on");
+    assert.deepEqual(m.results, [{ id: "word", found: false }], "the bar is still not reported, whatever happened to it; the reworded paragraph's drawing is lost");
+    assert.deepEqual(b.errors, []);
+    await b.context.close();
+  });
+
+  await step("r3.f3 and r2.f2: text is cut at whole characters, both where it is recorded and where it is compared", async () => {
+    const b = await open(phone);
+    const text = "x".repeat(499) + "😀😀";
+    // Where a quote is recorded: clicking an element in comment mode quotes its text, cut at 500 characters.
+    await tell(b, { mode: true });
+    const from = await mark(b);
+    await b.fr.locator("#longemoji").click();
+    const pick = await next(b, "shartifacts-comment-pick", from);
+    assert.equal(pick.quote, "x".repeat(499) + "😀", "500 whole characters, the emoji not split");
+    assert.ok(pick.quote.isWellFormed(), "no lone surrogate");
+    // Where it is compared: a drawing's remembered words are 120 whole characters of an emoji paragraph.
+    await tell(b, { mode: false });
+    const clipped = Array.from("😀".repeat(130)).slice(0, 120).join("");
+    const f = await mark(b);
+    await tell(b, { pins: [
+      { id: "quote", n: 1, anchor: "#longemoji", quote: pick.quote },
+      { id: "emoji", n: 2, anchor: "#emoji", quote: "", stroke: { ...under, anchor: "#emoji", anchor_tag: "p", anchor_text: clipped } },
+    ] });
+    const m = await next(b, "shartifacts-comment-match", f);
+    assert.deepEqual(m.results, [{ id: "quote", found: true }, { id: "emoji", found: true }]);
     assert.deepEqual(b.errors, []);
     await b.context.close();
   });
