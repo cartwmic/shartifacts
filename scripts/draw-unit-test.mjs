@@ -462,7 +462,7 @@ try {
     // Where a quote is recorded: clicking an element in comment mode quotes its text, cut at 500 characters.
     await tell(b, { mode: true });
     const from = await mark(b);
-    await b.fr.locator("#longemoji").click();
+    await b.fr.evaluate(() => document.querySelector("#longemoji").click());
     const pick = await next(b, "shartifacts-comment-pick", from);
     assert.equal(pick.quote, "x".repeat(499) + "😀", "500 whole characters, the emoji not split");
     assert.ok(pick.quote.isWellFormed(), "no lone surrogate");
