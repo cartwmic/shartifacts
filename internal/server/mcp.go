@@ -122,7 +122,7 @@ func rawJSON(v map[string]any) json.RawMessage {
 
 // mcpServer builds the server for one request; agent is the name of the token that signed
 // it in, if one did.
-func (s *Server) mcpServer(baseURL, uploadPath, agent string) *mcp.Server {
+func (s *Server) mcpServer(baseURL, uploadPath, agent string, src sourceHeaders) *mcp.Server {
 	claudeNote := ""
 	if s.Claude != nil {
 		claudeNote = "\nArtifacts can call Claude with await window.claude.complete(prompt) (or an array of {role, content} messages); it resolves to the reply text.\n"
@@ -223,16 +223,17 @@ Full guide: resource ` + guideURI + ` (libraries, capabilities, comments, media,
 		}
 		res := s.runSearch(in.Query, filters, in.Sort, min(limit, 50))
 		type result struct {
-			ID          string   `json:"id"`
-			Title       string   `json:"title"`
-			Kind        string   `json:"kind"`
-			Version     int      `json:"version"`
-			UpdatedAt   string   `json:"updated_at"`
-			Description string   `json:"description,omitempty"`
-			Tags        []string `json:"tags,omitempty"`
-			Matched     []string `json:"matched,omitempty"`
-			Excerpt     string   `json:"excerpt,omitempty"`
-			ArchivedAt  string   `json:"archived_at,omitempty"`
+			ID          string        `json:"id"`
+			Title       string        `json:"title"`
+			Kind        string        `json:"kind"`
+			Version     int           `json:"version"`
+			UpdatedAt   string        `json:"updated_at"`
+			Description string        `json:"description,omitempty"`
+			Tags        []string      `json:"tags,omitempty"`
+			Matched     []string      `json:"matched,omitempty"`
+			Excerpt     string        `json:"excerpt,omitempty"`
+			ArchivedAt  string        `json:"archived_at,omitempty"`
+			Source      *store.Source `json:"source"`
 		}
 		out := []result{}
 		for _, r := range res.Results {
@@ -244,7 +245,7 @@ Full guide: resource ` + guideURI + ` (libraries, capabilities, comments, media,
 			if !r.ArchivedAt.IsZero() {
 				archived = r.ArchivedAt.Format("2006-01-02")
 			}
-			out = append(out, result{r.Summary.ID, r.Title, r.Kind, r.Version, r.UpdatedAt.Format("2006-01-02"), r.Description, r.Summary.Tags, r.Matched, excerpt.String(), archived})
+			out = append(out, result{r.Summary.ID, r.Title, r.Kind, r.Version, r.UpdatedAt.Format("2006-01-02"), r.Description, r.Summary.Tags, r.Matched, excerpt.String(), archived, r.Summary.Source})
 		}
 		body := map[string]any{"results": out, "total": res.Total}
 		if res.Suggestion != "" {
@@ -310,7 +311,11 @@ Full guide: resource ` + guideURI + ` (libraries, capabilities, comments, media,
 		for p, body := range in.Files {
 			files[p] = &body
 		}
-		a, e := s.Store.Save("", store.Input{Title: in.Title, Kind: in.Kind, Content: in.Content, Files: files, Note: in.Note, Description: &in.Description, Icon: &in.Icon, Tags: &in.Tags, Capabilities: rawJSON(in.Capabilities)})
+		source, e := s.sourceForCreate(src)
+		if e != nil {
+			return nil, nil, e
+		}
+		a, e := s.Store.Save("", store.Input{Source: source, Title: in.Title, Kind: in.Kind, Content: in.Content, Files: files, Note: in.Note, Description: &in.Description, Icon: &in.Icon, Tags: &in.Tags, Capabilities: rawJSON(in.Capabilities)})
 		if e != nil {
 			return nil, nil, e
 		}

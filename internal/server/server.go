@@ -64,6 +64,8 @@ type Server struct {
 	Auth *auth.Store
 	// NoChunkUpload hides begin_media_upload/upload_media_chunk (shell agents use the curl upload).
 	NoChunkUpload bool
+	// RequireSource refuses create_artifact calls that lack X-Origin or X-Thread (mcp.go).
+	RequireSource bool
 	// Claude answers window.claude.complete and the sample capability; nil leaves it off.
 	Claude *Claude
 	// Connectors are the MCP servers the mcp capability reaches.
@@ -183,7 +185,19 @@ func (s *Server) build() http.Handler {
 			respond(w, 400, nil, e)
 			return
 		}
-		writeJSON(w, 200, s.Store.List(f))
+		list := s.Store.List(f)
+		// ?origin=X keeps pages made on that machine; ?no_source=1 keeps pages with no source.
+		origin, noSource := r.URL.Query().Get("origin"), r.URL.Query().Get("no_source") != ""
+		if origin != "" || noSource {
+			kept := list[:0]
+			for _, a := range list {
+				if (origin != "" && a.Source != nil && a.Source.Origin == origin) || (noSource && a.Source == nil) {
+					kept = append(kept, a)
+				}
+			}
+			list = kept
+		}
+		writeJSON(w, 200, list)
 	})
 	s.archiveRoutes(mux)
 	mux.HandleFunc("POST /api/artifacts", func(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +323,7 @@ func (s *Server) build() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		scheme := s.clientScheme(r)
-		return s.mcpServer(scheme+"://"+r.Host, s.uploadPath(r), agentName(r))
+		return s.mcpServer(scheme+"://"+r.Host, s.uploadPath(r), agentName(r), sourceOf(r))
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 12 << 20}))
 	files := http.FileServer(http.FS(s.Web))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
