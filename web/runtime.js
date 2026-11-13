@@ -423,12 +423,17 @@
     // `found` says whether the thread still holds: its quote is on the page (reworded
     // words are not), or, with no quote, its element exists. Reworded text keeps its pin
     // on the element so the spot can still be seen.
+    // A drawing holds while its anchor path still finds the element it was drawn on: the same
+    // tag, and the same first words. A path like `p:nth-of-type(4)` names a slot, and after an
+    // edit the slot holds whatever moved into it, which is not what was circled.
+    const drawingHolds = (el, s) => (!s.anchor_tag || el.tagName.toLowerCase() === s.anchor_tag) && (s.anchor_text == null || textOf(el).slice(0, 120) === s.anchor_text);
     const locate = (p) => {
       const quote = norm(p.quote);
       let el = null;
       try {
         el = p.anchor ? document.querySelector(p.anchor) : null;
       } catch {}
+      if (el && !quote && p.stroke && !drawingHolds(el, p.stroke)) return { el, found: false };
       if (el && (!quote || textOf(el).includes(quote))) {
         if (!quote || textOf(el).slice(0, 500) === quote) return { el, found: true };
         const range = findText(el, quote);
@@ -471,7 +476,18 @@
     // A saved stroke as the workspace sends it with a pin, or nothing if it cannot be drawn.
     const strokeOf = (s) =>
       Array.isArray(s?.points) && s.points.length > 1 && typeof s.box?.w === "number" && typeof s.box?.h === "number"
-        ? { stroke: { points: s.points, box: s.box, color: String(s.color || ""), width: s.width }, bounds: boundsOf(s.points) }
+        ? {
+            stroke: {
+              points: s.points,
+              box: s.box,
+              color: String(s.color || ""),
+              width: s.width,
+              // What the anchor was when it was drawn; strokes saved before these were recorded have neither.
+              ...(typeof s.anchor_tag === "string" && s.anchor_tag ? { anchor_tag: s.anchor_tag } : {}),
+              ...(typeof s.anchor_text === "string" ? { anchor_text: s.anchor_text } : {}),
+            },
+            bounds: boundsOf(s.points),
+          }
         : {};
     // The pen is perfect-freehand's getStroke, loaded from beside this script the first
     // time it is needed; a preview cannot fetch from anywhere else.
@@ -600,6 +616,8 @@
         v: 1,
         viewport: { w: innerWidth, h: innerHeight, scroll_x: Math.round(scrollX), scroll_y: Math.round(scrollY) },
         anchor: cssPath(el),
+        anchor_tag: el.tagName.toLowerCase(),
+        anchor_text: textOf(el).slice(0, 120),
         box: { x: r1(ox), y: r1(oy), w: r1(r.width), h: r1(r.height) },
         points: pts.map(([x, y, p]) => [r1(x - ox), r1(y - oy), Math.round(p * 100) / 100]),
         color: STROKE.color,
@@ -791,7 +809,8 @@ button{all:unset;pointer-events:auto;position:fixed;cursor:pointer!important;fon
       const seen = new Map();
       inked = new Set();
       for (const t of located) {
-        if (t.p.stroke && t.el) paintSaved(t.p.id, t.el, t.p.stroke, t.p.id === active ? 0.8 : 0.4);
+        // A drawing that no longer holds is not painted: it would sit over whatever moved in.
+        if (t.p.stroke && t.el && t.found) paintSaved(t.p.id, t.el, t.p.stroke, t.p.id === active ? 0.8 : 0.4);
         let pin = ui.byId.get(t.p.id);
         if (!pin) {
           pin = document.createElement("button");

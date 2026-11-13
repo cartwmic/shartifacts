@@ -115,6 +115,18 @@ npm run test:docker-apps
 # Messages API, and connectors against this server's own MCP endpoint
 npm run test:runtime
 
+# The draw tool and the overlay's found/lost rules in a real browser, and the same in the
+# workspace
+node scripts/draw-unit-test.mjs
+node scripts/draw-workspace-test.mjs
+
+# User journeys in a real headless Chromium at 390x844 (touch) and 1280x800 (mouse), against a
+# server of its own (`--local`) or a running one (`--base URL`): base, annot, draw, lost, fidelity
+node scripts/journey.mjs --local base annot draw lost fidelity
+
+# Whether the container image for this tree is built (both platforms)
+scripts/check-image.sh
+
 # Container startup, Linux React compilation, and volume persistence
 docker build -t shartifacts:verify .
 npm run test:docker

@@ -209,6 +209,8 @@ try {
     assert.equal(m.text, false);
     assert.equal(m.anchor, "#chart > svg > rect:nth-of-type(2)");
     assert.equal(s.anchor, m.anchor);
+    assert.equal(s.anchor_tag, "rect", "what the anchor was, so a later page can tell it is gone");
+    assert.equal(typeof s.anchor_text, "string");
     assert.ok(m.element.startsWith("<rect"), m.element);
     assert.equal(s.v, 1);
     assert.deepEqual(s.viewport, { w: 390, h: 844, scroll_x: 0, scroll_y: scroll });
@@ -375,7 +377,7 @@ try {
     await d.context.close();
   });
 
-  await step("found rules: a quote must be on the page (reworded is lost), a drawing needs its anchor, an anchor alone needs its element", async () => {
+  await step("found rules: a quote must be on the page (reworded is lost), a drawing needs the element it was drawn on (same tag and words), an anchor alone needs its element", async () => {
     const b = await open(phone);
     const pin = (id, anchor, quote, s) => ({ id, n: 1, anchor, quote, ...(s ? { stroke: s } : {}) });
     const pins = [
@@ -385,6 +387,11 @@ try {
       pin("quote-nowhere", "#gone", "Nothing like this"),
       pin("draw-here", under.anchor, "", under),
       pin("draw-lost", "#gone", "", { ...under, anchor: "#gone" }),
+      // The path still finds an element, but not the one drawn on: other words, or another tag.
+      pin("draw-reworded", under.anchor, "", { ...under, anchor_text: "Nothing like what was circled" }),
+      pin("draw-retagged", under.anchor, "", { ...under, anchor_tag: "section" }),
+      // A stroke from before the page recorded its anchor holds while the path finds an element.
+      pin("draw-older", under.anchor, "", (({ anchor_tag, anchor_text, ...rest }) => rest)(under)),
       pin("anchor-here", "#title", ""),
       pin("anchor-lost", "#gone", ""),
     ];
@@ -399,11 +406,14 @@ try {
       "quote-nowhere": false,
       "draw-here": true,
       "draw-lost": false,
+      "draw-reworded": false,
+      "draw-retagged": false,
+      "draw-older": true,
       "anchor-here": true,
       "anchor-lost": false,
     });
     const placed = await next(b, "shartifacts-comment-placed", from);
-    assert.deepEqual([...placed.missing].sort(), ["anchor-lost", "draw-lost", "quote-nowhere", "quote-reworded"], "the workspace is told which threads are not found");
+    assert.deepEqual([...placed.missing].sort(), ["anchor-lost", "draw-lost", "draw-retagged", "draw-reworded", "quote-nowhere", "quote-reworded"], "the workspace is told which threads are not found");
     // Rewording the page after it is shown changes what is reported, once it settles.
     from = await mark(b);
     await b.fr.evaluate(() => (document.querySelector("#copy").innerHTML = "Revenue <b id='grew'>fell</b> in Q2."));

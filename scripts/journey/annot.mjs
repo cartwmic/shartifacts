@@ -1,4 +1,4 @@
-// A1-A5 from JOURNEY.md on a phone: comment on selected text, circle part of the page and
+// A1-A5 of the annotation journey on a phone: comment on selected text, circle part of the page and
 // comment, the agent reads it all back (and gets a picture), the page changes and the
 // agent sees which comments lost their place, then replies and resolves.
 import assert from "node:assert/strict";

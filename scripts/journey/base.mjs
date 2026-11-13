@@ -1,4 +1,4 @@
-// JOURNEY.md steps 1-10: an agent publishes a page with a form, a person on a phone (or a
+// Steps 1-10 of the base journey: an agent publishes a page with a form, a person on a phone (or a
 // desktop) fills it in a real browser, and the agent reads the answers back.
 import assert from "node:assert/strict";
 import { mcpSession, watch, sizeOf } from "./lib.mjs";

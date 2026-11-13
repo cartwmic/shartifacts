@@ -85,6 +85,7 @@ func TestStrokeRoundTrip(t *testing.T) {
 	a, _ := s.Save("", Input{Title: "Page", Kind: "html", Content: "x"})
 	b, _ := s.Save(a.ID, Input{Title: "Page", Kind: "html", Content: "y", BaseVersion: 1})
 	st := strokeInput(2)
+	st.AnchorTag, st.AnchorText = "svg", "Revenue by quarter"
 	st.Elements = []StrokeElement{{Path: "#chart > svg > rect", Tag: `<rect class="bar">`, Text: "Q2 revenue"}}
 	root, e := s.AddComment(b.ID, CommentInput{Body: "this bar", Version: 1, Stroke: st})
 	if e != nil || root.Stroke == nil || root.Stroke.Version != 1 || root.Stroke.V != 1 {
@@ -98,7 +99,7 @@ func TestStrokeRoundTrip(t *testing.T) {
 	}
 	again, _ := Open(dir)
 	list, _ := again.Comments(b.ID)
-	if len(list) != 1 || list[0].Stroke == nil || list[0].Stroke.Version != 1 || len(list[0].Stroke.Points) != 2 || list[0].Stroke.Points[1][1] != 0.5 || list[0].Stroke.Elements[0].Text != "Q2 revenue" || list[0].Stroke.Box.H != 210 {
+	if len(list) != 1 || list[0].Stroke == nil || list[0].Stroke.Version != 1 || len(list[0].Stroke.Points) != 2 || list[0].Stroke.Points[1][1] != 0.5 || list[0].Stroke.Elements[0].Text != "Q2 revenue" || list[0].Stroke.Box.H != 210 || list[0].Stroke.AnchorTag != "svg" || list[0].Stroke.AnchorText != "Revenue by quarter" {
 		t.Fatal("stroke did not survive a reload", list)
 	}
 }
@@ -118,13 +119,20 @@ func TestStrokeRefused(t *testing.T) {
 	tooMany.Elements = make([]StrokeElement, 21)
 	longText := strokeInput(1)
 	longText.Elements = []StrokeElement{{Path: "a", Text: strings.Repeat("é", 121)}}
-	for name, bad := range map[string]*Stroke{"points": strokeInput(3001), "elements": tooMany, "bytes": big, "text": longText} {
+	longAnchorText := strokeInput(1)
+	longAnchorText.AnchorText = strings.Repeat("é", 121)
+	for name, bad := range map[string]*Stroke{"points": strokeInput(3001), "elements": tooMany, "bytes": big, "text": longText, "anchor text": longAnchorText} {
 		if _, e := s.AddComment(a.ID, CommentInput{Body: "x", Stroke: bad}); e == nil || e.Error() != "stroke too large" {
 			t.Fatal(name, e)
 		}
 	}
 	if _, e := s.AddComment(a.ID, CommentInput{Body: "x", Stroke: strokeInput(3000)}); e != nil {
 		t.Fatal("3000 points is within the limit", e)
+	}
+	longTag := strokeInput(1)
+	longTag.AnchorTag = strings.Repeat("a", 41)
+	if _, e := s.AddComment(a.ID, CommentInput{Body: "x", Stroke: longTag}); e == nil {
+		t.Fatal("an anchor_tag over 40 bytes was accepted")
 	}
 	empty := strokeInput(0)
 	badPressure := strokeInput(1)

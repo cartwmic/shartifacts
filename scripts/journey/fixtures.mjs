@@ -80,5 +80,6 @@ ${Array.from({ length: filler }, (_, i) => `<section class="fill" id="fill-${i +
 <table id="sales"><thead><tr><th>Region</th><th>Q1</th><th>Q2</th></tr></thead>
 <tbody><tr><td>North</td><td id="cell-north-q1">12</td><td id="cell-north-q2">15</td></tr>
 <tr><td>South</td><td id="cell-south-q1">9</td><td id="cell-south-q2">11</td></tr></tbody></table>
+${rev === 1 ? `<p style="margin-top:14px">Figures are rounded to the nearest whole number.</p>` : ""}
 <p style="margin-top:14px">End of the note.</p>
 </body></html>`;

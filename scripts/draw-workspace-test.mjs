@@ -83,6 +83,8 @@ try {
   assert.equal(body.quote, undefined);
   assert.equal(body.stroke.v, 1);
   assert.equal(body.stroke.anchor, "#chart");
+  assert.equal(typeof body.stroke.anchor_tag, "string", "the posted stroke says what its anchor was");
+  assert.equal(typeof body.stroke.anchor_text, "string");
   assert.ok(body.stroke.points.length > 10 && body.stroke.elements.some((e) => e.path === "#chart"));
   assert.equal(body.version, 1);
   console.log(`SAW the comment posts with its stroke (${body.stroke.points.length} points, anchor ${body.stroke.anchor})`);
