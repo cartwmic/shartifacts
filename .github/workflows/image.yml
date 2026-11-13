@@ -1,0 +1,47 @@
+name: image
+
+# Builds the multi-arch image and pushes it to GHCR, tagged by the git tree hash of the
+# commit. The tree hash, not the commit hash, is the tag so that a merge or a rebase that
+# leaves the files unchanged finds the image it already built. scripts/check-image.sh asks
+# the registry for that tag. This workflow is ours: upstream has no .github directory.
+on:
+  push:
+    branches: [main, "feat/**", "ci/**"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Name the image
+        id: name
+        run: |
+          # GHCR names are lowercase; github.repository keeps the owner's capitals.
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        id: build
+        with:
+          context: .
+          # The Dockerfile cross-compiles, so building arm64 on an amd64 runner needs no QEMU.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # Plain image manifests only, so the tag lists exactly the two platforms.
+          provenance: false
+          tags: |
+            ${{ steps.name.outputs.image }}:tree-${{ steps.name.outputs.tree }}
+            ${{ github.ref == 'refs/heads/main' && format('{0}:main', steps.name.outputs.image) || '' }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+      - name: Record the digest
+        run: echo "${{ steps.name.outputs.image }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"

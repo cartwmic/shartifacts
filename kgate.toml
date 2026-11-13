@@ -1,0 +1,7 @@
+# kgate profile for the fork's heavy jobs (Go tests, vet, browser journeys). Run:
+#   run-and-wake -- kgate -- scripts/kgate-job.sh <command...>
+# The pinned image is the kgate "browser" variant (Node, Python, Chromium libraries) and has no Go; scripts/kgate-job.sh adds the Go toolchain and the Playwright browser for the job.
+image  = "ghcr.io/cartwmic/kgate@sha256:402ca1a3f017aaaf488d5746ca73b3d0d6c82def9cb555e25bc5eeda067eee20"
+cpu    = 2
+memory = "2Gi"
+memory_limit = "4Gi"

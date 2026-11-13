@@ -125,6 +125,9 @@ window.addEventListener("message", (event) => {
   else if (d.type === "shartifacts-comment-moved" && pointed) placeComposer(d.rect);
   else if (d.type === "shartifacts-comment-open") showThread(String(d.id));
   else if (d.type === "shartifacts-comment-exit") setCommentMode(false);
+  // Undo on a drawing that has not been sent yet.
+  else if (d.type === "shartifacts-comment-clear" && pointed?.stroke) closeComposer();
+  else if (d.type === "shartifacts-comment-match") reportMatches(d);
   else if (d.type === "shartifacts-comment-placed" && Array.isArray(d.missing)) {
     unplaced = new Set(d.missing.map(String));
     markUnplaced();
@@ -1045,8 +1048,51 @@ function commentNode(c) {
   );
   el.append(meta);
   if (c.quote) el.append(node("blockquote", "comment-quote", c.quote));
+  if (c.stroke) el.append(strokeThumb(c.stroke));
   el.append(node("p", "comment-body", c.body));
   return el;
+}
+// A small picture of a drawing: its points as a line, alone, since the page it was drawn
+// on is not here.
+function strokeThumb(s) {
+  const xs = s.points.map((p) => p[0]),
+    ys = s.points.map((p) => p[1]),
+    pad = (s.width || 4) + 2,
+    x = Math.min(...xs) - pad,
+    y = Math.min(...ys) - pad;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"),
+    path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  svg.setAttribute("viewBox", `${x} ${y} ${Math.max(...xs) - x + pad} ${Math.max(...ys) - y + pad}`);
+  svg.setAttribute("class", "stroke-thumb");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Drawing");
+  path.setAttribute("d", "M" + s.points.map((p) => p[0] + " " + p[1]).join("L"));
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", s.color);
+  path.setAttribute("stroke-width", s.width || 4);
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  svg.append(path);
+  return svg;
+}
+// The frame is the artifact's, so a drawing it reports is rebuilt from numbers and short
+// strings before it goes anywhere.
+function cleanStroke(s) {
+  const num = (v, or = 0) => (Number.isFinite(v) ? v : or),
+    text = (v, n) => (typeof v === "string" ? v.slice(0, n) : "");
+  if (!s || !Array.isArray(s.points) || s.points.length < 2 || !s.box) return null;
+  return {
+    v: 1,
+    viewport: { w: num(s.viewport?.w), h: num(s.viewport?.h), scroll_x: num(s.viewport?.scroll_x), scroll_y: num(s.viewport?.scroll_y) },
+    anchor: text(s.anchor, 2000),
+    ...(text(s.anchor_tag, 40) ? { anchor_tag: text(s.anchor_tag, 40) } : {}),
+    ...(typeof s.anchor_text === "string" ? { anchor_text: Array.from(s.anchor_text).slice(0, 120).join("") } : {}),
+    box: { x: num(s.box.x), y: num(s.box.y), w: num(s.box.w), h: num(s.box.h) },
+    points: s.points.slice(0, 3000).map((p) => [num(p?.[0]), num(p?.[1]), num(p?.[2], 0.5)]),
+    color: /^#[0-9a-f]{3,8}$/i.test(s.color) ? s.color : "#d33",
+    width: Math.min(Math.max(num(s.width, 4), 1), 24),
+    elements: Array.isArray(s.elements) ? s.elements.slice(0, 20).map((e) => ({ path: text(e?.path, 2000), tag: text(e?.tag, 500), text: text(e?.text, 120) })) : [],
+  };
 }
 function renderComments() {
   const all = $("#show-resolved").checked,
@@ -1122,16 +1168,36 @@ function renderComments() {
 function pinnedThreads() {
   return comments
     .filter((c) => !c.parent && !c.resolved && c.anchor)
-    .map((c, i) => ({ id: c.id, n: i + 1, anchor: c.anchor, quote: c.quote || "" }));
+    .map((c, i) => ({ id: c.id, n: i + 1, anchor: c.anchor, quote: c.quote || "", stroke: c.stroke }));
 }
 // Tells the preview what to pin and whether a click there picks something to comment on.
 function syncFrame() {
   const w = $("#preview")?.contentWindow;
   if (!w || !state.artifact) return;
   w.postMessage(
-    { type: "shartifacts-comments", enabled: true, mode: commentMode, pins: pinnedThreads(), active: activeThread, pending: !!pointed },
+    { type: "shartifacts-comments", enabled: true, mode: commentMode, pins: pinnedThreads(), active: activeThread, pending: !!pointed, version: state.version },
     "*",
   );
+}
+// The preview says which threads it could still find in the version it shows. The server
+// keeps that so an agent can tell the threads that went stale from the ones that hold.
+// A draft being edited is not a version, so nothing is said about it.
+async function reportMatches(d) {
+  const known = new Set(comments.filter((c) => !c.parent).map((c) => c.id)),
+    results = Array.isArray(d.results) ? d.results.filter((r) => known.has(r?.id)).map((r) => ({ id: r.id, found: !!r.found })) : [];
+  if (!state.artifact || state.editing || d.version !== state.version || !results.length) return;
+  // The page says this once it has stopped changing, so it also settles which threads the panel
+  // flags as not found: the earlier, quicker `placed` message can be reset by a frame reload.
+  unplaced = new Set(results.filter((r) => !r.found).map((r) => r.id));
+  markUnplaced();
+  try {
+    await api(`/api/artifacts/${encodeURIComponent(state.artifact.id)}/comments/matches`, {
+      method: "POST",
+      body: JSON.stringify({ version: d.version, results }),
+    });
+  } catch {
+    /* The report is a courtesy; the threads work without it. */
+  }
 }
 function setCommentMode(on) {
   commentMode = !!on && !!state.artifact && state.view !== "source" && state.view !== "changes";
@@ -1157,7 +1223,7 @@ function threadTarget(c, n) {
     target.append(node("span", "pin-badge", String(n)));
     target.onclick = () => focusInFrame(c.id);
   }
-  target.append(node("span", "thread-target-name", "On " + targetName(c.element, c.anchor)));
+  target.append(node("span", "thread-target-name", (c.stroke ? "Drawing on " : "On ") + targetName(c.element, c.anchor)));
   target.append(node("span", "thread-unplaced", " · not found in this version"));
   return target;
 }
@@ -1202,12 +1268,16 @@ function showThread(id) {
 function openPointed(d) {
   if (!state.artifact || $("#artifact").hidden) return false;
   const text = (v, n) => (typeof v === "string" ? v.slice(0, n) : "");
-  pointed = { anchor: text(d.anchor, 2000), quote: text(d.quote, 2000), element: text(d.element, 500), selection: !!d.text };
+  pointed = { anchor: text(d.anchor, 2000), quote: text(d.quote, 2000), element: text(d.element, 500), selection: !!d.text, stroke: cleanStroke(d.stroke) };
   const name = targetName(pointed.element, pointed.anchor),
     words = pointed.quote.length > 60 ? pointed.quote.slice(0, 57) + "…" : pointed.quote;
-  $("#pointed-label").textContent = pointed.selection
-    ? `On text in ${name}`
-    : `On ${name}${words ? ` · “${words}”` : ""}`;
+  $("#pointed-label").textContent = pointed.stroke
+    ? `Drawing on ${name}`
+    : pointed.selection
+      ? `On text in ${name}`
+      : `On ${name}${words ? ` · “${words}”` : ""}`;
+  $("#comment-popover .stroke-thumb")?.remove();
+  if (pointed.stroke) $("#pointed-quote").before(strokeThumb(pointed.stroke));
   $("#pointed-quote").textContent = pointed.quote;
   $("#pointed-quote").hidden = !pointed.selection || !pointed.quote;
   const form = $("#comment-popover");
@@ -1302,6 +1372,7 @@ $("#comment-popover").onsubmit = async (e) => {
       quote: pointed.quote || undefined,
       anchor: pointed.anchor || undefined,
       element: pointed.element || undefined,
+      stroke: pointed.stroke || undefined,
       to_claude: toAgent || undefined,
       version: state.version,
     });

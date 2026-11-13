@@ -693,7 +693,8 @@ try {
       await immersive();
     }
     if (sample.kind === "markdown")
-      await expect(frame.locator("svg")).toBeVisible();
+      // The comment overlay keeps an svg ink layer in its shadow root; the page's own diagram is the other one.
+      await expect(frame.locator("svg:not(.ink)")).toBeVisible();
     assert.equal(
       await page
         .locator("#preview")
