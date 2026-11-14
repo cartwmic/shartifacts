@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The server holds a third less memory.** Search kept, for every artifact, a map of maps recording how each word was spelled, which cost more than all the indexed text together. On 445 artifacts and 14 MB of source the live heap fell from 134 MB to 81 MB and idle resident memory from about 210 MB to about 150 MB. Search, corrections and related pages return the same results.
+
 ### Added
 
 - **Pages record where an agent made them** ([docs/http-api.md](docs/http-api.md#page-source), [docs/agents.md](docs/agents.md)). A page created through `/mcp` stores `source` `{origin, thread}` from the `X-Origin` and `X-Thread` headers, set once and never changed. `GET /api/artifacts` shows it and filters with `?origin=` and `?no_source=1`; the MCP list and search tools include it. `SHARTIFACTS_REQUIRE_SOURCE=true` refuses agent-made pages without both headers; library creates and uploads are never refused.
